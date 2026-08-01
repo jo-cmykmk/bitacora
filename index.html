@@ -108,6 +108,9 @@ p.page-sub{margin:0 0 14px;color:var(--text-dim);font-size:14px;}
 .boot-spinner{width:28px;height:28px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--green);
   animation:boot-spin .8s linear infinite;}
 @keyframes boot-spin{to{transform:rotate(360deg);}}
+.sync-banner{position:fixed;bottom:calc(90px + var(--safe-bottom));left:16px;right:16px;max-width:568px;margin:0 auto;
+  background:var(--orange);color:#fff;text-align:center;font-size:12.5px;font-weight:600;padding:10px 16px;
+  border-radius:16px;box-shadow:0 10px 24px -8px rgba(0,0,0,0.3);z-index:79;line-height:1.35;}
 .update-banner{position:fixed;top:calc(10px + var(--safe-top));left:16px;right:16px;max-width:568px;margin:0 auto;
   background:var(--green-deep);color:#fff;text-align:center;font-size:13px;font-weight:700;padding:10px 16px;
   border-radius:20px;box-shadow:0 10px 24px -8px rgba(0,0,0,0.35);z-index:80;cursor:pointer;
@@ -389,7 +392,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.4';
+const APP_VERSION = '2026-08-01.6';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -431,7 +434,22 @@ function syncKeyToServer(key, json){
   fetch(url.replace(/\/$/,'')+'/kv/'+encodeURIComponent(key), {
     method:'PUT', headers:{'Content-Type':'application/json','X-API-Key':apiKey},
     body: JSON.stringify({value:json})
-  }).catch(()=>{ /* sin conexión: se queda pendiente en local, ya se reintentará en la próxima escritura */ });
+  }).then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    ocultarAvisoSync();
+  }).catch(()=>{ mostrarAvisoSync(); /* se queda guardado en local; se reintentará en la próxima escritura o al reabrir */ });
+}
+function mostrarAvisoSync(){
+  if(document.getElementById('sync-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'sync-banner';
+  b.className = 'sync-banner';
+  b.innerHTML = '⚠️ No se ha podido sincronizar con el servidor — este cambio solo está guardado en este dispositivo por ahora.';
+  document.body.appendChild(b);
+}
+function ocultarAvisoSync(){
+  const b = document.getElementById('sync-banner');
+  if(b) b.remove();
 }
 
 async function hydrateStoreFromServer(){
@@ -439,7 +457,7 @@ async function hydrateStoreFromServer(){
   if(!url || !apiKey) return; // app 100% local, como hasta ahora
   try{
     const resp = await fetch(url.replace(/\/$/,'')+'/kv', {headers:{'X-API-Key':apiKey}, cache:'no-store'});
-    if(!resp.ok) return;
+    if(!resp.ok){ mostrarAvisoSync(); return; }
     const data = await resp.json();
     if(Object.keys(data).length === 0){
       // Servidor vacío (primera vez): subimos lo que ya tenemos en este teléfono como semilla.
@@ -450,7 +468,7 @@ async function hydrateStoreFromServer(){
           Store._cache[k] = v;
           await fetch(url.replace(/\/$/,'')+'/kv/'+encodeURIComponent(k), {
             method:'PUT', headers:{'Content-Type':'application/json','X-API-Key':apiKey}, body: JSON.stringify({value:v})
-          }).catch(()=>{});
+          }).catch(()=>mostrarAvisoSync());
         }
       }
     } else {
@@ -458,8 +476,9 @@ async function hydrateStoreFromServer(){
         Store._cache[k] = data[k];
         try{ localStorage.setItem(k, data[k]); }catch(e){}
       });
+      ocultarAvisoSync();
     }
-  }catch(e){ /* servidor no disponible ahora: seguimos con lo que haya en local */ }
+  }catch(e){ mostrarAvisoSync(); /* servidor no disponible ahora: seguimos con lo que haya en local */ }
 }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -560,7 +579,7 @@ function getVehicleWarnings(v, logs){
   const warnings = [];
   Object.entries(alerts).forEach(([tipo, threshold])=>{
     if(!threshold || threshold<=0) return;
-    const last = logs.filter(l=>l.vehicleId===v.id && l.tipo===tipo).sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
+    const last = logs.filter(l=>l.vehicleId===v.id && l.tipo===tipo).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
     const kmSince = last ? (v.km - last.km) : v.km;
     if(kmSince>=threshold){
       warnings.push({tipo, kmSince, threshold, label: logInfo(tipo).label});
@@ -731,7 +750,7 @@ function renderAutonomo(){
       <div class="meta"><div class="t1">${c.nombre}</div><div class="t2">${c.nif}</div></div></div>
   `).join('') : `<div class="empty"><span class="icn">🧑‍💼</span><div class="t">Sin clientes</div></div>`;
 
-  const ingresos = Store.get(KEYS.INGRESOS_AU,[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const ingresos = Store.get(KEYS.INGRESOS_AU,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
   let showAllIng = auShowAllIngresos;
   const shownIng = showAllIng ? ingresos : ingresos.slice(0,6);
   document.getElementById('au-ingresos-toggle').textContent = showAllIng ? '← Ver menos' : 'Ver todos →';
@@ -745,7 +764,7 @@ function renderAutonomo(){
   }).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin ingresos todavía</div><div class="d">Regístralos con el botón +</div></div>`;
   document.querySelectorAll('#au-ingresos-list [data-ing]').forEach(r=>r.addEventListener('click', ()=>openIngresoSheet(r.dataset.ing)));
 
-  const gastos = Store.get(KEYS.GASTOS_AU,[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const gastos = Store.get(KEYS.GASTOS_AU,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
   let showAllGas = auShowAllGastos;
   const shownGas = showAllGas ? gastos : gastos.slice(0,6);
   document.getElementById('au-gastos-toggle').textContent = showAllGas ? '← Ver menos' : 'Ver todos →';
@@ -1202,7 +1221,7 @@ function renderInicio(){
       ${warnings.map(w=>`<div style="font-size:14px;line-height:1.4;margin-bottom:4px;">🔧 ${w}</div>`).join('')}
     </div>` : '';
 
-  const tx = Store.get(KEYS.TX,[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4);
+  const tx = Store.get(KEYS.TX,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4);
   document.getElementById('ini-movs').innerHTML = tx.length ? tx.map(t=>{
     const info = catInfo(t.category);
     return `<div class="row" data-tx="${t.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
@@ -1346,7 +1365,7 @@ function renderFinanzas(){
   renderChart(evolutionSeries(evoPeriod, evoSource));
   renderTips();
 
-  const tx = Store.get(KEYS.TX,[]).slice().sort((a,b)=> new Date(b.date)-new Date(a.date));
+  const tx = Store.get(KEYS.TX,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
   document.getElementById('fin-toggle').textContent = showAllTx ? '← Ver menos' : 'Ver todos →';
   const listEl = document.getElementById('fin-list');
   if(!tx.length){
@@ -1411,7 +1430,7 @@ function renderVehiculosList(){
   const vehs = Store.get(KEYS.VEH,[]);
   const logs = Store.get(KEYS.LOGS,[]);
   document.getElementById('veh-list').innerHTML = vehs.map(v=>{
-    const last = logs.filter(l=>l.vehicleId===v.id).sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
+    const last = logs.filter(l=>l.vehicleId===v.id).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
     const vWarns = getVehicleWarnings(v, logs);
     return `<div class="row veh-row" data-id="${v.id}" style="cursor:pointer;">
       <div class="ico veh-badge">${vehIcon(v.tipo)}</div>
@@ -1520,8 +1539,8 @@ function openVehicleDetail(vehId){
   wrap.style.display='block';
   const v = Store.get(KEYS.VEH,[]).find(x=>x.id===vehId);
   if(!v){ renderVehiculosList(); return; }
-  const logs = Store.get(KEYS.LOGS,[]).filter(l=>l.vehicleId===vehId).sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const fuels = Store.get(KEYS.FUEL,[]).filter(f=>f.vehicleId===vehId).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const logs = Store.get(KEYS.LOGS,[]).filter(l=>l.vehicleId===vehId).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const fuels = Store.get(KEYS.FUEL,[]).filter(f=>f.vehicleId===vehId).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
   const consumos = fuelChain(vehId);
   const avg = avgConsumption(vehId);
 

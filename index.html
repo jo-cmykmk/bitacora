@@ -103,10 +103,9 @@ p.page-sub{margin:0 0 14px;color:var(--text-dim);font-size:14px;}
 .month-nav .lbl{font-weight:700;font-size:15px;text-transform:capitalize;}
 
 /* ---------- HERO CARD ---------- */
-.hero-carousel{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
-  scrollbar-width:none;border-radius:var(--radius-lg);}
-.hero-carousel::-webkit-scrollbar{display:none;}
-.hero-page{flex:0 0 100%;scroll-snap-align:start;min-width:100%;}
+.hero-carousel{position:relative;overflow:hidden;border-radius:var(--radius-lg);}
+.hero-track{display:flex;width:200%;touch-action:pan-y;}
+.hero-page{width:50%;flex-shrink:0;box-sizing:border-box;}
 .hero-page .hero{margin-bottom:0;}
 .hero-dots{display:flex;justify-content:center;gap:6px;margin:10px 0 18px;}
 .hero-dots .dot{width:6px;height:6px;border-radius:50%;background:var(--line);transition:all .2s ease;}
@@ -1002,6 +1001,7 @@ function heroHTML(t){
   const pct = t.baseAhorro>0 ? Math.round(t.ahorro/t.baseAhorro*100) : 0;
   const total = ahorroTotalAcumulado();
   return `<div class="hero-carousel" id="hero-carousel">
+    <div class="hero-track" id="hero-track">
     <div class="hero-page"><div class="hero">
       <div class="eyebrow">Balance del mes</div>
       <div class="big ${t.bal<0?'neg':''} num">${fmtEUR(t.bal)}</div>
@@ -1020,17 +1020,62 @@ function heroHTML(t){
         <div><div class="lbl">Autónomo</div><div class="val inc num">${fmtEUR(total.autonomo)}</div></div>
       </div>
     </div></div>
+    </div>
   </div>
   <div class="hero-dots"><span class="dot active"></span><span class="dot"></span></div>`;
 }
 function wireHeroCarousel(){
   const car = document.getElementById('hero-carousel');
-  if(!car) return;
+  const track = document.getElementById('hero-track');
+  if(!car || !track) return;
   const dots = document.querySelectorAll('.hero-dots .dot');
-  car.addEventListener('scroll', ()=>{
-    const idx = Math.round(car.scrollLeft / car.clientWidth);
-    dots.forEach((d,i)=>d.classList.toggle('active', i===idx));
-  }, {passive:true});
+  let pagina = 0; // 0 o 1
+  let startX = 0, startY = 0, deltaX = 0, arrastrando = false, decidido = false, esHorizontal = false;
+
+  function irA(idx, animar){
+    pagina = Math.max(0, Math.min(1, idx));
+    track.style.transition = animar ? 'transform .28s ease' : 'none';
+    track.style.transform = `translateX(${-pagina*50}%)`;
+    dots.forEach((d,i)=>d.classList.toggle('active', i===pagina));
+  }
+  irA(0, false);
+
+  function onStart(x, y){
+    arrastrando = true; decidido = false; esHorizontal = false;
+    startX = x; startY = y; deltaX = 0;
+    track.style.transition = 'none';
+  }
+  function onMove(x, y, ev){
+    if(!arrastrando) return;
+    const dx = x - startX, dy = y - startY;
+    if(!decidido){
+      if(Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      decidido = true;
+      esHorizontal = Math.abs(dx) > Math.abs(dy);
+    }
+    if(!esHorizontal) return;
+    if(ev && ev.cancelable) ev.preventDefault();
+    deltaX = dx;
+    const base = -pagina*50;
+    const porcentaje = (deltaX / car.clientWidth) * 50;
+    track.style.transform = `translateX(${base + porcentaje}%)`;
+  }
+  function onEnd(){
+    if(!arrastrando) return;
+    arrastrando = false;
+    if(esHorizontal){
+      const umbral = car.clientWidth * 0.18;
+      if(deltaX < -umbral) irA(pagina+1, true);
+      else if(deltaX > umbral) irA(pagina-1, true);
+      else irA(pagina, true);
+    }
+  }
+  car.addEventListener('touchstart', e=>onStart(e.touches[0].clientX, e.touches[0].clientY), {passive:true});
+  car.addEventListener('touchmove', e=>onMove(e.touches[0].clientX, e.touches[0].clientY, e), {passive:false});
+  car.addEventListener('touchend', onEnd);
+  car.addEventListener('mousedown', e=>onStart(e.clientX, e.clientY));
+  window.addEventListener('mousemove', e=>{ if(arrastrando) onMove(e.clientX, e.clientY, e); });
+  window.addEventListener('mouseup', onEnd);
 }
 function renderHeader(){
   const title = document.getElementById('pg-title');

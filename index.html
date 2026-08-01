@@ -103,6 +103,11 @@ p.page-sub{margin:0 0 14px;color:var(--text-dim);font-size:14px;}
 .month-nav .lbl{font-weight:700;font-size:15px;text-transform:capitalize;}
 
 /* ---------- HERO CARD ---------- */
+#boot-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;color:var(--text-dim);font-size:14px;font-weight:600;}
+.boot-spinner{width:28px;height:28px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--green);
+  animation:boot-spin .8s linear infinite;}
+@keyframes boot-spin{to{transform:rotate(360deg);}}
 .update-banner{position:fixed;top:calc(10px + var(--safe-top));left:16px;right:16px;max-width:568px;margin:0 auto;
   background:var(--green-deep);color:#fff;text-align:center;font-size:13px;font-weight:700;padding:10px 16px;
   border-radius:20px;box-shadow:0 10px 24px -8px rgba(0,0,0,0.35);z-index:80;cursor:pointer;
@@ -384,19 +389,75 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.2';
+const APP_VERSION = '2026-08-01.3';
 
-/* ============ STORE ============ */
-const Store = {
-  get(key, fallback){ try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }catch(e){ return fallback; } },
-  set(key, val){ localStorage.setItem(key, JSON.stringify(val)); }
-};
+/* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
   AUTONOMO:'bitacora_autonomo_reservado', THEME:'bitacora_theme',
   CLIENTES:'bitacora_au_clientes', INGRESOS_AU:'bitacora_au_ingresos', GASTOS_AU:'bitacora_au_gastos',
   SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom',
   CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden', CAT_INCOME_CUSTOM:'bitacora_cat_income_custom',
   CAT_INCOME_HIDDEN:'bitacora_cat_income_hidden', CAT_OVERRIDES:'bitacora_cat_overrides' };
+
+// Estas claves son ajustes de ESTE dispositivo (a qué servidor hablar) — nunca se sincronizan.
+const LOCAL_ONLY_KEYS = new Set([KEYS.SERVER_URL, KEYS.SERVER_KEY]);
+
+function serverConfig(){
+  return { url: localStorage.getItem(KEYS.SERVER_URL) || '', key: localStorage.getItem(KEYS.SERVER_KEY) || '' };
+}
+
+const Store = {
+  _cache: {},
+  get(key, fallback){
+    if(Object.prototype.hasOwnProperty.call(this._cache, key)){
+      try{ return this._cache[key]===null ? fallback : JSON.parse(this._cache[key]); }catch(e){ return fallback; }
+    }
+    try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }catch(e){ return fallback; }
+  },
+  set(key, val){
+    const json = JSON.stringify(val);
+    this._cache[key] = json;
+    try{ localStorage.setItem(key, json); }catch(e){}
+    if(!LOCAL_ONLY_KEYS.has(key)) syncKeyToServer(key, json);
+  }
+};
+
+function syncKeyToServer(key, json){
+  const {url, key: apiKey} = serverConfig();
+  if(!url || !apiKey) return; // sin servidor configurado: se queda solo en local, como siempre
+  fetch(url.replace(/\/$/,'')+'/kv/'+encodeURIComponent(key), {
+    method:'PUT', headers:{'Content-Type':'application/json','X-API-Key':apiKey},
+    body: JSON.stringify({value:json})
+  }).catch(()=>{ /* sin conexión: se queda pendiente en local, ya se reintentará en la próxima escritura */ });
+}
+
+async function hydrateStoreFromServer(){
+  const {url, key: apiKey} = serverConfig();
+  if(!url || !apiKey) return; // app 100% local, como hasta ahora
+  try{
+    const resp = await fetch(url.replace(/\/$/,'')+'/kv', {headers:{'X-API-Key':apiKey}, cache:'no-store'});
+    if(!resp.ok) return;
+    const data = await resp.json();
+    if(Object.keys(data).length === 0){
+      // Servidor vacío (primera vez): subimos lo que ya tenemos en este teléfono como semilla.
+      for(let i=0;i<localStorage.length;i++){
+        const k = localStorage.key(i);
+        if(k && k.startsWith('bitacora_') && !LOCAL_ONLY_KEYS.has(k)){
+          const v = localStorage.getItem(k);
+          Store._cache[k] = v;
+          await fetch(url.replace(/\/$/,'')+'/kv/'+encodeURIComponent(k), {
+            method:'PUT', headers:{'Content-Type':'application/json','X-API-Key':apiKey}, body: JSON.stringify({value:v})
+          }).catch(()=>{});
+        }
+      }
+    } else {
+      Object.keys(data).forEach(k=>{
+        Store._cache[k] = data[k];
+        try{ localStorage.setItem(k, data[k]); }catch(e){}
+      });
+    }
+  }catch(e){ /* servidor no disponible ahora: seguimos con lo que haya en local */ }
+}
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 function applyTheme(t){
@@ -441,7 +502,6 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CAT_INCOME_HIDDEN,null)===null) Store.set(KEYS.CAT_INCOME_HIDDEN,[]);
   if(Store.get(KEYS.CAT_OVERRIDES,null)===null) Store.set(KEYS.CAT_OVERRIDES,{});
 }
-seedIfEmpty();
 
 /* ============ CATEGORIES ============ */
 const CAT_EXPENSE = [
@@ -1694,10 +1754,11 @@ function openAjustesSheet(){
       <div id="set-cats-list-income"></div>
       <button class="btn btn-outline" id="set-cat-add-income" style="margin-top:8px;">＋ Añadir categoría</button>
     </div>
-    <div class="field"><label>Servidor de facturación</label>
+    <div class="field"><label>Servidor (datos + facturación)</label>
       <input type="text" id="set-server-url" placeholder="https://tu-servidor.onrender.com" value="${Store.get(KEYS.SERVER_URL,'')}">
       <input type="text" id="set-server-key" placeholder="Clave APP_API_KEY" value="${Store.get(KEYS.SERVER_KEY,'')}" style="margin-top:8px;">
       <button class="btn btn-outline" id="set-server-save" style="margin-top:8px;">Guardar conexión</button>
+      <p style="font-size:12px;color:var(--text-dim);margin:8px 0 0;">Si lo configuras, toda la app (Finanzas, Vehículos, Autónomo) se sincroniza con este servidor — así da igual si la abres desde el icono o desde Safari, verás siempre los mismos datos. Déjalo vacío para seguir 100% local como hasta ahora.</p>
     </div>
     <div class="field"><label>Actualizaciones</label>
       <p style="font-size:13px;color:var(--text-dim);margin:0 0 8px;">Versión instalada: <b style="color:var(--ink);">${APP_VERSION}</b></p>
@@ -1727,7 +1788,8 @@ function openAjustesSheet(){
   document.getElementById('set-server-save').addEventListener('click', ()=>{
     Store.set(KEYS.SERVER_URL, document.getElementById('set-server-url').value.trim());
     Store.set(KEYS.SERVER_KEY, document.getElementById('set-server-key').value.trim());
-    alert('Conexión guardada.');
+    alert('Conexión guardada. La app se va a recargar para sincronizar.');
+    location.reload();
   });
   document.getElementById('check-updates').addEventListener('click', ()=>comprobarActualizacion(false));
   document.getElementById('backup-export').addEventListener('click', exportarCopiaSeguridad);
@@ -1942,9 +2004,22 @@ function mostrarBannerActualizacion(nuevaVersion){
 }
 
 /* ============ INIT ============ */
-applyTheme(Store.get(KEYS.THEME,'light'));
-showView('inicio');
-setTimeout(()=>comprobarActualizacion(true), 1500);
+(async function iniciar(){
+  const {url} = serverConfig();
+  let overlay;
+  if(url){
+    overlay = document.createElement('div');
+    overlay.id = 'boot-overlay';
+    overlay.innerHTML = '<div class="boot-spinner"></div><div>Sincronizando…</div>';
+    document.body.appendChild(overlay);
+  }
+  await hydrateStoreFromServer();
+  seedIfEmpty();
+  if(overlay) overlay.remove();
+  applyTheme(Store.get(KEYS.THEME,'light'));
+  showView('inicio');
+  setTimeout(()=>comprobarActualizacion(true), 1500);
+})();
 </script>
 </body>
 </html>

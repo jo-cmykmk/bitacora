@@ -389,7 +389,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.3';
+const APP_VERSION = '2026-08-01.4';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -403,7 +403,10 @@ const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs',
 const LOCAL_ONLY_KEYS = new Set([KEYS.SERVER_URL, KEYS.SERVER_KEY]);
 
 function serverConfig(){
-  return { url: localStorage.getItem(KEYS.SERVER_URL) || '', key: localStorage.getItem(KEYS.SERVER_KEY) || '' };
+  function leerLocal(key){
+    try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : ''; }catch(e){ return ''; }
+  }
+  return { url: leerLocal(KEYS.SERVER_URL), key: leerLocal(KEYS.SERVER_KEY) };
 }
 
 const Store = {

@@ -551,7 +551,7 @@ async function generarFacturaReal(ingreso, onEstado){
         ingresos[idx].facturaId = encontrada.id;
         Store.set(KEYS.INGRESOS_AU, ingresos);
       }
-      onEstado(`Factura ${encontrada.numero} encontrada y vinculada automáticamente — sí se había creado.`, false, true);
+      onEstado(`Factura ${encontrada.numero} encontrada y vinculada automáticamente — sí se había creado.${encontrada.sheet_actualizado?' Fila añadida al Sheet.':' (aviso: no se pudo actualizar el Sheet — '+(encontrada.sheet_error||'motivo desconocido')+')'}`, false, true);
     } else {
       onEstado('No se ha podido contactar con el servidor ni confirmar si la factura se creó ('+e.message+'). Prueba a esperar un minuto (el servidor puede estar despertando) y usa "Vincular factura ya creada" si ves que sí existe en FacturaDirecta.', true);
     }
@@ -561,7 +561,7 @@ async function generarFacturaReal(ingreso, onEstado){
 async function buscarFacturaAutomatica(ingreso, cliente){
   const url = Store.get(KEYS.SERVER_URL,''); const key = Store.get(KEYS.SERVER_KEY,'');
   try{
-    const params = new URLSearchParams({cliente: cliente.nombre, importe: ingreso.importe, fecha: ingreso.date});
+    const params = new URLSearchParams({cliente: cliente.nombre, nif: cliente.nif||'', concepto: ingreso.concepto||'', importe: ingreso.importe, fecha: ingreso.date});
     const resp = await fetch(url.replace(/\/$/,'')+'/facturas/buscar-por-datos?'+params.toString(), {headers:{'X-API-Key':key}});
     if(!resp.ok) return null;
     return await resp.json();
@@ -767,8 +767,10 @@ function openIngresoSheet(ingresoId){
         estado.textContent = 'Buscando en FacturaDirecta…';
         estado.style.color = 'var(--text-dim)';
         const url = Store.get(KEYS.SERVER_URL,''); const key = Store.get(KEYS.SERVER_KEY,'');
+        const cli = clienteObj(existing.clienteId);
         try{
-          const resp = await fetch(url.replace(/\/$/,'')+'/facturas/buscar?numero='+encodeURIComponent(numero.trim()), { headers:{'X-API-Key':key} });
+          const qs = new URLSearchParams({numero: numero.trim(), cliente: cli.nombre||'', nif: cli.nif||'', concepto: existing.concepto||'', importe: existing.importe, fecha: existing.date});
+          const resp = await fetch(url.replace(/\/$/,'')+'/facturas/buscar?'+qs.toString(), { headers:{'X-API-Key':key} });
           const data = await resp.json();
           if(!resp.ok) throw new Error(data.detail || resp.status);
           const ingresos = Store.get(KEYS.INGRESOS_AU,[]);
@@ -780,8 +782,9 @@ function openIngresoSheet(ingresoId){
             Store.set(KEYS.INGRESOS_AU, ingresos);
             existing.facturado = true; existing.numeroFactura = data.numero; existing.facturaId = data.id;
           }
-          renderAutonomo();
-          render();
+          estado.textContent = data.sheet_actualizado ? 'Vinculada y añadida al Sheet.' : 'Vinculada (aviso: no se pudo actualizar el Sheet — '+(data.sheet_error||'motivo desconocido')+').';
+          estado.style.color = data.sheet_actualizado ? 'var(--green-deep)' : 'var(--orange)';
+          setTimeout(()=>{ renderAutonomo(); render(); }, 3000);
         }catch(e){
           estado.textContent = 'No se ha encontrado: '+e.message;
           estado.style.color = 'var(--orange)';

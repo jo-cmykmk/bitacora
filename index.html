@@ -342,6 +342,9 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
       <div class="section-head"><h2>Ahorro del mes</h2></div>
       <div class="card pad" id="fin-ahorro"></div>
 
+      <div class="section-head"><h2>Gastos fijos</h2></div>
+      <div class="card" id="fin-recurrentes"></div>
+
       <div class="section-head"><h2>Recomendaciones</h2></div>
       <div class="card" id="fin-tips"></div>
 
@@ -392,7 +395,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.6';
+const APP_VERSION = '2026-08-01.8';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -574,6 +577,32 @@ const LOG_TYPES = [
 ];
 function logInfo(key){ return LOG_TYPES.find(l=>l.k===key) || {label:key, ic:'🔧'}; }
 
+function renderGastoVehiculo(vehId){
+  const el = document.getElementById('veh-gasto-total');
+  if(!el) return;
+  const tx = Store.get(KEYS.TX,[]).filter(t=>t.type==='expense' && t.vehiculoId===vehId);
+  if(!tx.length){
+    el.innerHTML = `<div class="empty"><span class="icn">💶</span><div class="t">Sin gastos etiquetados todavía</div><div class="d">En Finanzas, al registrar un gasto, elige este vehículo en "Vehículo relacionado" para que aparezca aquí.</div></div>`;
+    return;
+  }
+  const total = tx.reduce((s,t)=>s+t.amount,0);
+  const porCategoria = {};
+  tx.forEach(t=>{ porCategoria[t.category] = (porCategoria[t.category]||0)+t.amount; });
+  const filas = Object.entries(porCategoria).sort((a,b)=>b[1]-a[1]);
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div class="num" style="font-size:24px;color:var(--orange);">${fmtEUR(total)}</div>
+      <div class="badge">${tx.length} gasto${tx.length===1?'':'s'}</div>
+    </div>
+    ${filas.map(([cat,amt])=>{
+      const info = catInfo(cat); const pct = Math.round(amt/total*100);
+      return `<div class="bd-row"><div class="name">${info.ic} ${info.label}</div>
+        <div class="track"><div class="fill" style="width:${pct}%"></div></div>
+        <div class="amt num">${fmtEUR(amt)}</div></div>`;
+    }).join('')}
+  `;
+}
+
 function getVehicleWarnings(v, logs){
   const alerts = v.alerts || {};
   const warnings = [];
@@ -582,7 +611,18 @@ function getVehicleWarnings(v, logs){
     const last = logs.filter(l=>l.vehicleId===v.id && l.tipo===tipo).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
     const kmSince = last ? (v.km - last.km) : v.km;
     if(kmSince>=threshold){
-      warnings.push({tipo, kmSince, threshold, label: logInfo(tipo).label});
+      const label = logInfo(tipo).label;
+      warnings.push({label, corto:label, mensaje:`Toca revisar ${label.toLowerCase()} — van ${kmSince.toLocaleString('es-ES')} km (alerta cada ${threshold.toLocaleString('es-ES')} km).`});
+    }
+  });
+  const hoy = new Date();
+  const diasHasta = f => Math.ceil((new Date(f) - hoy) / 86400000);
+  [['itvFecha','ITV'], ['seguroFecha','Seguro']].forEach(([campo,label])=>{
+    if(!v[campo]) return;
+    const dias = diasHasta(v[campo]);
+    if(dias<=30){
+      warnings.push({label, corto:label,
+        mensaje: dias<0 ? `${label} caducada hace ${Math.abs(dias)} días.` : dias===0 ? `${label} caduca hoy.` : `${label} caduca en ${dias} días.`});
     }
   });
   return warnings;
@@ -1205,7 +1245,7 @@ function renderInicio(){
   const warnings = [];
   document.getElementById('ini-vehiculos').innerHTML = vehs.map(v=>{
     const vWarns = getVehicleWarnings(v, logs);
-    vWarns.forEach(w=> warnings.push(`Toca revisar <b>${w.label.toLowerCase()}</b> de <b>${v.name}</b> — van ${w.kmSince.toLocaleString('es-ES')} km (alerta cada ${w.threshold.toLocaleString('es-ES')} km).`));
+    vWarns.forEach(w=> warnings.push(`<b>${v.name}</b>: ${w.mensaje}`));
     return `<div class="row" data-veh="${v.id}" style="cursor:pointer;">
       <div class="ico veh-badge">${vehIcon(v.tipo)}</div>
       <div class="meta"><div class="t1">${v.name}</div><div class="t2">${v.km.toLocaleString('es-ES')} km</div></div>
@@ -1324,6 +1364,37 @@ function renderTips(){
     : `<div class="empty"><span class="icn illo">${ILLO_TIPS}</span><div class="t">Aún sin recomendaciones</div><div class="d">Registra unos movimientos y aparecerán aquí</div></div>`;
 }
 
+function renderRecurrentes(){
+  const el = document.getElementById('fin-recurrentes');
+  if(!el) return;
+  const tx = Store.get(KEYS.TX,[]).filter(t=>t.recurrente);
+  if(!tx.length){
+    el.innerHTML = `<div class="empty"><span class="icn">🔁</span><div class="t">Sin gastos fijos identificados todavía</div><div class="d">Marca la casilla "Es recurrente" al registrar uno (alquiler, seguros, suscripciones...) y aquí se irán agrupando.</div></div>`;
+    return;
+  }
+  // Nos quedamos con la ocurrencia más reciente de cada gasto fijo (agrupado por nota, o por categoría si no hay nota)
+  const grupos = {};
+  tx.forEach(t=>{
+    const clave = (t.note && t.note.trim()) ? t.note.trim().toLowerCase() : 'cat:'+t.category;
+    if(!grupos[clave] || new Date(t.date) > new Date(grupos[clave].date)) grupos[clave] = t;
+  });
+  const items = Object.values(grupos).sort((a,b)=>b.amount-a.amount);
+  const totalGastos = items.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const totalIngresos = items.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  el.innerHTML = `
+    <div class="row" style="border-bottom:1px solid var(--line);">
+      <div class="meta"><div class="t1">Total fijo mensual</div><div class="t2">${items.length} identificado${items.length===1?'':'s'}</div></div>
+      <div class="side"><div class="amt num" style="color:var(--orange);">${fmtEUR(totalGastos)}</div>${totalIngresos?`<div class="t2 num" style="color:var(--green-deep);">+${fmtEUR(totalIngresos)}</div>`:''}</div>
+    </div>
+    ${items.map(t=>{
+      const info = catInfo(t.category);
+      return `<div class="row"><div class="ico" style="background:${info.color}">${info.ic}</div>
+        <div class="meta"><div class="t1">${t.note || info.label}</div><div class="t2">${info.label} · último: ${fmtDate(t.date)}</div></div>
+        <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div></div></div>`;
+    }).join('')}
+  `;
+}
+
 function renderAhorro(){
   const mk = monthKeyOf(new Date());
   const tx = Store.get(KEYS.TX,[]);
@@ -1353,6 +1424,7 @@ function renderAhorro(){
 
 function renderFinanzas(){
   renderAhorro();
+  renderRecurrentes();
   document.querySelectorAll('#evo-source-seg button').forEach(b=>{
     b.classList.toggle('active', b.dataset.s===evoSource);
     b.onclick = ()=>{ evoSource=b.dataset.s; renderFinanzas(); };
@@ -1377,7 +1449,7 @@ function renderFinanzas(){
       const info = catInfo(t.category);
       return `<div class="row" data-tx="${t.id}" style="cursor:pointer;">
         <div class="ico" style="background:${info.color}">${info.ic}</div>
-        <div class="meta"><div class="t1">${info.label}</div><div class="t2">${t.note ? t.note : fmtDate(t.date)}</div></div>
+        <div class="meta"><div class="t1">${info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${t.note ? t.note : fmtDate(t.date)}</div></div>
         <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div><div class="date">${fmtDate(t.date)}</div></div>
       </div>`;
     }).join('');
@@ -1481,6 +1553,8 @@ function openEditVehicleSheet(vehId){
       <div class="seg" id="ev-seg"><button data-t="coche" class="${tipo==='coche'?'active':''}">Coche</button><button data-t="moto" class="${tipo==='moto'?'active':''}">Moto</button></div>
     </div>
     <div class="field"><label>Kilometraje actual</label><input type="number" inputmode="numeric" id="ev-km" value="${v.km}"></div>
+    <div class="field"><label>Próxima ITV</label><input type="date" id="ev-itv" value="${v.itvFecha||''}"></div>
+    <div class="field"><label>Próximo seguro</label><input type="date" id="ev-seguro" value="${v.seguroFecha||''}"></div>
     <div class="actions"><button class="btn btn-primary" id="ev-save">Guardar cambios</button></div>
     <div style="text-align:center;"><button class="btn-danger" id="ev-delete">Eliminar vehículo</button></div>
   `;
@@ -1492,6 +1566,8 @@ function openEditVehicleSheet(vehId){
     vehs[idx].name = document.getElementById('ev-name').value.trim() || vehs[idx].name;
     vehs[idx].tipo = tipo;
     vehs[idx].km = parseInt(document.getElementById('ev-km').value,10) || vehs[idx].km;
+    vehs[idx].itvFecha = document.getElementById('ev-itv').value || null;
+    vehs[idx].seguroFecha = document.getElementById('ev-seguro').value || null;
     Store.set(KEYS.VEH, vehs);
     closeSheet(); openVehicleDetail(vehId);
   });
@@ -1551,10 +1627,14 @@ function openVehicleDetail(vehId){
       <div class="big num">${v.km.toLocaleString('es-ES')} <span style="font-size:16px;font-weight:600;color:rgba(255,255,255,0.6);">km</span></div>
       ${avg ? `<div class="pill-center"><div class="pill">Consumo medio: ${avg.toFixed(1)} L/100km</div></div>` : ''}
     </div>
+    ${getVehicleWarnings(v, Store.get(KEYS.LOGS,[])).map(w=>`<div class="card pad" style="background:var(--orange-soft);margin-bottom:10px;font-size:14px;">⚠️ ${w.mensaje}</div>`).join('')}
     <div class="btn-row">
       <button class="btn btn-secondary" id="add-fuel">⛽ Repostaje</button>
       <button class="btn btn-primary" id="add-log">🔧 Mantenimiento</button>
     </div>
+
+    <div class="section-head"><h2>Gasto total (desde Finanzas)</h2></div>
+    <div class="card pad" id="veh-gasto-total"></div>
 
     <div class="section-head"><h2>Repostajes</h2></div>
     <div class="card" id="fuel-list">
@@ -1587,6 +1667,7 @@ function openVehicleDetail(vehId){
   document.getElementById('veh-alerts').addEventListener('click', ()=>openAlertsSheet(vehId));
   document.getElementById('add-log').addEventListener('click', ()=>openLogSheet(vehId));
   document.getElementById('add-fuel').addEventListener('click', ()=>openFuelSheet(vehId));
+  renderGastoVehiculo(vehId);
 }
 
 /* ============ SHEET ENGINE ============ */
@@ -1633,6 +1714,13 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="tx-amount" placeholder="0,00" value="${existing?existing.amount:(presetAmount!=null?presetAmount:'')}"></div>
     <div class="field"><label>Categoría</label><div class="chips" id="tx-cats"></div></div>
     <div class="field"><label>Nota (opcional)</label><input type="text" id="tx-note" placeholder="Ej. Cena con Marta" value="${existing?(existing.note||'').replace(/"/g,'&quot;'):(presetNote?presetNote.replace(/"/g,'&quot;'):'')}"></div>
+    <div class="check-row"><input type="checkbox" id="tx-recurrente" ${existing&&existing.recurrente?'checked':''}><label for="tx-recurrente">🔁 Es recurrente (se repite cada mes)</label></div>
+    <div class="field"><label>Vehículo relacionado (opcional)</label>
+      <select id="tx-vehiculo">
+        <option value="">— Ninguno —</option>
+        ${Store.get(KEYS.VEH,[]).map(v=>`<option value="${v.id}" ${existing&&existing.vehiculoId===v.id?'selected':''}>${v.name}</option>`).join('')}
+      </select>
+    </div>
     <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
     ${existing?`<div style="text-align:center;"><button class="btn-danger" id="tx-delete">Eliminar movimiento</button></div>`:''}
   `;
@@ -1651,11 +1739,13 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     if(!amt || amt<=0){ document.getElementById('tx-amount').focus(); return; }
     const tx = Store.get(KEYS.TX,[]);
     const note = document.getElementById('tx-note').value.trim();
+    const recurrente = document.getElementById('tx-recurrente').checked;
+    const vehiculoId = document.getElementById('tx-vehiculo').value || null;
     if(existing){
       const idx = tx.findIndex(x=>x.id===existing.id);
-      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note};
+      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note, recurrente, vehiculoId};
     } else {
-      tx.push({id:uid(), type, amount:amt, category:cat, note, date:todayISO()});
+      tx.push({id:uid(), type, amount:amt, category:cat, note, recurrente, vehiculoId, date:todayISO()});
     }
     Store.set(KEYS.TX, tx);
     closeSheet();

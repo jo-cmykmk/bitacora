@@ -77,7 +77,9 @@ html,body{margin:0;background:var(--bg);color:var(--ink);
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
   height:100%;overscroll-behavior:none;}
 body{-webkit-font-smoothing:antialiased;}
-.num{font-family:"Manrope",ui-rounded,-apple-system,sans-serif;font-weight:800;letter-spacing:-0.01em;}
+.num{font-family:"Manrope",ui-rounded,-apple-system,sans-serif;font-weight:800;letter-spacing:-0.01em;
+  transition:filter .2s ease;}
+body.privacidad .num{filter:blur(7px);user-select:none;}
 h1.page-title,.hero .big,.sheet h3{font-family:"Manrope",-apple-system,sans-serif;}
 #app{max-width:600px;margin:0 auto;position:relative;min-height:100vh;}
 
@@ -88,6 +90,9 @@ header.top{padding:calc(16px + var(--safe-top)) 20px 4px;}
   display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;}
 .gear{width:44px;height:44px;border-radius:50%;background:var(--card);display:flex;align-items:center;
   justify-content:center;font-size:18px;border:1px solid var(--line);cursor:pointer;}
+.privacy-btn{width:26px;height:26px;border-radius:50%;background:var(--card);color:var(--text-dim);
+  display:flex;align-items:center;justify-content:center;border:1px solid var(--line);cursor:pointer;
+  flex-shrink:0;padding:0;}
 h1.page-title{font-size:26px;font-weight:800;margin:0 0 2px;letter-spacing:-0.01em;}
 p.page-sub{margin:0 0 14px;color:var(--text-dim);font-size:14px;}
 
@@ -212,7 +217,9 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 .tabbar{position:fixed;left:16px;right:16px;bottom:calc(14px + var(--safe-bottom));max-width:568px;
   margin:0 auto;background:var(--nav-bg);backdrop-filter:blur(24px) saturate(1.6);
   -webkit-backdrop-filter:blur(24px) saturate(1.6);border:1px solid var(--nav-border);border-radius:30px;
-  box-shadow:0 16px 40px -12px rgba(21,23,18,0.22);display:flex;padding:9px 10px;z-index:40;}
+  box-shadow:0 16px 40px -12px rgba(21,23,18,0.22);display:flex;padding:9px 10px;z-index:40;
+  transition:transform .25s ease, opacity .25s ease;}
+.tabbar.oculta{transform:translateY(140%);opacity:0;pointer-events:none;}
 .tab{flex:1;background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;
   color:var(--text-dim);font-size:10px;font-weight:700;cursor:pointer;padding:5px 0;transition:color .15s ease;}
 .tab svg{width:20px;height:20px;stroke:currentColor;}
@@ -276,7 +283,14 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 <body>
 <div id="app">
   <header class="top">
-    <h1 class="page-title" id="pg-title">Bitácora</h1>
+    <div class="top-row" style="justify-content:space-between;align-items:center;margin-bottom:2px;">
+      <h1 class="page-title" id="pg-title" style="margin:0;">Bitácora</h1>
+      <button class="privacy-btn" id="privacy-toggle" title="Ocultar importes" aria-label="Ocultar importes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+          <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+    </div>
     <p class="page-sub" id="pg-sub">Cargando…</p>
     <div id="month-nav-slot"></div>
     <div id="hero-slot"></div>
@@ -363,7 +377,8 @@ const Store = {
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
   AUTONOMO:'bitacora_autonomo_reservado', THEME:'bitacora_theme',
   CLIENTES:'bitacora_au_clientes', INGRESOS_AU:'bitacora_au_ingresos', GASTOS_AU:'bitacora_au_gastos',
-  SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom' };
+  SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom',
+  CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden' };
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 function applyTheme(t){
@@ -403,6 +418,7 @@ function seedIfEmpty(){
   if(Store.get(KEYS.SERVER_URL,null)===null) Store.set(KEYS.SERVER_URL,'https://facturadirecta.onrender.com');
   if(Store.get(KEYS.SERVER_KEY,null)===null) Store.set(KEYS.SERVER_KEY,'VYRK2XOatziOFPJDB6UnGywzTh1H7LWBJ5-gqp4bFJY');
   if(Store.get(KEYS.CAT_EXPENSE_CUSTOM,null)===null) Store.set(KEYS.CAT_EXPENSE_CUSTOM,[]);
+  if(Store.get(KEYS.CAT_EXPENSE_HIDDEN,null)===null) Store.set(KEYS.CAT_EXPENSE_HIDDEN,[]);
 }
 seedIfEmpty();
 
@@ -426,7 +442,10 @@ const CAT_COLORES = [
   {v:'var(--yellow-soft)', nombre:'Amarillo'},
   {v:'var(--green-soft)', nombre:'Verde'},
 ];
-function catExpenseTodas(){ return CAT_EXPENSE.concat(Store.get(KEYS.CAT_EXPENSE_CUSTOM,[])); }
+function catExpenseTodas(){
+  const ocultas = Store.get(KEYS.CAT_EXPENSE_HIDDEN,[]);
+  return CAT_EXPENSE.filter(c=>!ocultas.includes(c.k)).concat(Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]));
+}
 function catInfo(key){ return [...catExpenseTodas(),...CAT_INCOME].find(c=>c.k===key) || {label:key, ic:'📎', color:'var(--bg)'}; }
 
 const LOG_TYPES = [
@@ -1559,20 +1578,37 @@ function openAjustesSheet(){
 document.getElementById('settings-btn').addEventListener('click', openAjustesSheet);
 
 function renderCatsSettings(){
+  const ocultas = Store.get(KEYS.CAT_EXPENSE_HIDDEN,[]);
+  const fijas = CAT_EXPENSE.filter(c=>!ocultas.includes(c.k));
   const custom = Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]);
   const el = document.getElementById('set-cats-list');
   if(!el) return;
-  el.innerHTML = custom.length ? custom.map(c=>`
+  const fila = (c, esFija) => `
     <div class="row" style="padding:8px 0;">
       <div class="ico" style="background:${c.color};width:32px;height:32px;font-size:15px;">${c.ic}</div>
-      <div class="meta"><div class="t1" style="font-size:14px;">${c.label}</div></div>
+      <div class="meta"><div class="t1" style="font-size:14px;">${c.label}${esFija?' <span style="color:var(--text-dim);font-size:11px;">(por defecto)</span>':''}</div></div>
       <button class="btn-danger" data-del="${c.k}" style="font-size:13px;">Eliminar</button>
-    </div>
-  `).join('') : `<p style="font-size:13px;color:var(--text-dim);margin:6px 0 0;">Solo tienes las categorías por defecto. Añade las tuyas con el botón de abajo.</p>`;
+    </div>`;
+  el.innerHTML = fijas.map(c=>fila(c,true)).join('') + custom.map(c=>fila(c,false)).join('');
+  if(ocultas.length){
+    el.innerHTML += `<button class="btn btn-outline" id="cat-restaurar" style="margin-top:8px;font-size:13px;">↺ Restaurar categorías por defecto eliminadas</button>`;
+  }
   el.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', ()=>{
-    Store.set(KEYS.CAT_EXPENSE_CUSTOM, Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]).filter(c=>c.k!==btn.dataset.del));
+    const k = btn.dataset.del;
+    if(CAT_EXPENSE.some(c=>c.k===k)){
+      const oc = Store.get(KEYS.CAT_EXPENSE_HIDDEN,[]);
+      if(!oc.includes(k)) oc.push(k);
+      Store.set(KEYS.CAT_EXPENSE_HIDDEN, oc);
+    } else {
+      Store.set(KEYS.CAT_EXPENSE_CUSTOM, Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]).filter(c=>c.k!==k));
+    }
     renderCatsSettings();
   }));
+  const btnRestaurar = document.getElementById('cat-restaurar');
+  if(btnRestaurar) btnRestaurar.addEventListener('click', ()=>{
+    Store.set(KEYS.CAT_EXPENSE_HIDDEN, []);
+    renderCatsSettings();
+  });
 }
 
 function openAddCategoriaSheet(){
@@ -1628,6 +1664,35 @@ function exportarCopiaSeguridad(){
   const amt = importe ? parseFloat(importe.replace(',','.')) : null;
   if(q==='gasto'){ showView('finanzas'); setTimeout(()=>openTxSheet('expense', amt, comercio), 200); }
   else if(q==='ingreso'){ showView('finanzas'); setTimeout(()=>openTxSheet('income', amt, comercio), 200); }
+})();
+
+/* ============ MODO PRIVACIDAD (difuminar importes) ============ */
+const ICON_OJO_ABIERTO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_OJO_CERRADO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 4.22-5.19M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>`;
+document.getElementById('privacy-toggle').addEventListener('click', ()=>{
+  const activo = document.body.classList.toggle('privacidad');
+  document.getElementById('privacy-toggle').innerHTML = activo ? ICON_OJO_CERRADO : ICON_OJO_ABIERTO;
+});
+
+/* ============ PANEL FLOTANTE: ocultar al bajar, mostrar al llegar arriba ============ */
+(function(){
+  const tabbar = document.querySelector('.tabbar');
+  let lastY = window.scrollY;
+  let ticking = false;
+  window.addEventListener('scroll', ()=>{
+    if(ticking) return;
+    ticking = true;
+    requestAnimationFrame(()=>{
+      const y = window.scrollY;
+      if(y <= 8){
+        tabbar.classList.remove('oculta');
+      } else if(y - lastY > 4){
+        tabbar.classList.add('oculta');
+      }
+      lastY = y;
+      ticking = false;
+    });
+  }, {passive:true});
 })();
 
 /* ============ INIT ============ */

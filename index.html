@@ -103,6 +103,10 @@ p.page-sub{margin:0 0 14px;color:var(--text-dim);font-size:14px;}
 .month-nav .lbl{font-weight:700;font-size:15px;text-transform:capitalize;}
 
 /* ---------- HERO CARD ---------- */
+.update-banner{position:fixed;top:calc(10px + var(--safe-top));left:16px;right:16px;max-width:568px;margin:0 auto;
+  background:var(--green-deep);color:#fff;text-align:center;font-size:13px;font-weight:700;padding:10px 16px;
+  border-radius:20px;box-shadow:0 10px 24px -8px rgba(0,0,0,0.35);z-index:80;cursor:pointer;
+  animation:fadein .3s ease;}
 .hero-carousel{position:relative;overflow:hidden;border-radius:var(--radius-lg);}
 .hero-track{display:flex;width:200%;touch-action:pan-y;}
 .hero-page{width:50%;flex-shrink:0;box-sizing:border-box;}
@@ -379,6 +383,9 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 <div class="lightbox" id="lightbox"><button class="close" id="lightbox-close">✕</button><img id="lightbox-img"></div>
 
 <script>
+/* ============ VERSIÓN ============ */
+const APP_VERSION = '2026-08-01.2';
+
 /* ============ STORE ============ */
 const Store = {
   get(key, fallback){ try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }catch(e){ return fallback; } },
@@ -994,8 +1001,9 @@ function ahorroTotalAcumulado(){
   const nomina = tx.filter(t=>t.type==='income' && t.category==='nomina').reduce((s,t)=>s+t.amount,0);
   const autonomoTx = tx.filter(t=>t.type==='income' && t.category==='autonomo').reduce((s,t)=>s+t.amount,0);
   const autonomoModulo = Store.get(KEYS.INGRESOS_AU,[]).reduce((s,i)=>s+ingresoNeto(i),0);
-  const gastos = tx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
-  return {nomina, autonomo: autonomoTx+autonomoModulo, gastos, total: nomina+autonomoTx+autonomoModulo-gastos};
+  const ahorroCategoria = tx.filter(t=>t.type==='income' && t.category==='otros_ing').reduce((s,t)=>s+t.amount,0);
+  const autonomo = autonomoTx + autonomoModulo;
+  return {nomina, autonomo, ahorro: ahorroCategoria, total: nomina + autonomo + ahorroCategoria};
 }
 function heroHTML(t){
   const pct = t.baseAhorro>0 ? Math.round(t.ahorro/t.baseAhorro*100) : 0;
@@ -1004,17 +1012,17 @@ function heroHTML(t){
     <div class="hero-track" id="hero-track">
     <div class="hero-page"><div class="hero">
       <div class="eyebrow">Balance del mes</div>
-      <div class="big ${t.bal<0?'neg':''} num">${fmtEUR(t.bal)}</div>
+      <div class="big ${t.ahorro<0?'neg':''} num">${fmtEUR(t.ahorro)}</div>
       <div class="pill-center"><div class="pill">${pct}% de ahorro (nómina + autónomo)</div></div>
       <div class="split">
-        <div><div class="lbl">Ingresos</div><div class="val inc num">${fmtEUR(t.inc)}</div></div>
+        <div><div class="lbl">Ingresos</div><div class="val inc num">${fmtEUR(t.baseAhorro)}</div></div>
         <div><div class="lbl">Gastos</div><div class="val exp num">${fmtEUR(t.exp)}</div></div>
       </div>
     </div></div>
     <div class="hero-page"><div class="hero">
       <div class="eyebrow">Balance total (desde siempre)</div>
       <div class="big ${total.total<0?'neg':''} num">${fmtEUR(total.total)}</div>
-      <div class="pill-center"><div class="pill">Nómina + autónomo − gastos, acumulado</div></div>
+      <div class="pill-center"><div class="pill">Nómina + autónomo + ahorro, acumulado</div></div>
       <div class="split">
         <div><div class="lbl">Nómina</div><div class="val inc num">${fmtEUR(total.nomina)}</div></div>
         <div><div class="lbl">Autónomo</div><div class="val inc num">${fmtEUR(total.autonomo)}</div></div>
@@ -1691,6 +1699,10 @@ function openAjustesSheet(){
       <input type="text" id="set-server-key" placeholder="Clave APP_API_KEY" value="${Store.get(KEYS.SERVER_KEY,'')}" style="margin-top:8px;">
       <button class="btn btn-outline" id="set-server-save" style="margin-top:8px;">Guardar conexión</button>
     </div>
+    <div class="field"><label>Actualizaciones</label>
+      <p style="font-size:13px;color:var(--text-dim);margin:0 0 8px;">Versión instalada: <b style="color:var(--ink);">${APP_VERSION}</b></p>
+      <button class="btn btn-outline" id="check-updates">🔄 Comprobar actualizaciones</button>
+    </div>
     <div class="field"><label>Copia de seguridad</label>
       <div class="btn-row">
         <button class="btn btn-outline" id="backup-export">⬇️ Exportar copia</button>
@@ -1717,6 +1729,7 @@ function openAjustesSheet(){
     Store.set(KEYS.SERVER_KEY, document.getElementById('set-server-key').value.trim());
     alert('Conexión guardada.');
   });
+  document.getElementById('check-updates').addEventListener('click', ()=>comprobarActualizacion(false));
   document.getElementById('backup-export').addEventListener('click', exportarCopiaSeguridad);
   document.getElementById('backup-import-file').addEventListener('change', e=>{
     const file = e.target.files[0];
@@ -1903,9 +1916,35 @@ document.getElementById('privacy-toggle').addEventListener('click', ()=>{
   }, {passive:true});
 })();
 
+/* ============ COMPROBAR ACTUALIZACIONES ============ */
+function comprobarActualizacion(silencioso){
+  fetch(location.pathname + '?_check=' + Date.now(), {cache:'no-store'})
+    .then(r=>r.text())
+    .then(html=>{
+      const m = html.match(/const APP_VERSION\s*=\s*'([^']+)'/);
+      if(m && m[1] && m[1] !== APP_VERSION){
+        mostrarBannerActualizacion(m[1]);
+        if(!silencioso) alert('Hay una versión nueva disponible: '+m[1]+' (tienes '+APP_VERSION+').');
+      } else if(!silencioso){
+        alert('Ya tienes la versión más reciente ('+APP_VERSION+').');
+      }
+    })
+    .catch(()=>{ if(!silencioso) alert('No se ha podido comprobar — revisa tu conexión.'); });
+}
+function mostrarBannerActualizacion(nuevaVersion){
+  if(document.getElementById('update-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'update-banner';
+  b.className = 'update-banner';
+  b.innerHTML = `🔄 Nueva versión disponible — <span style="text-decoration:underline;">toca para actualizar</span>`;
+  b.addEventListener('click', ()=>{ location.href = location.pathname + '?_upd=' + Date.now(); });
+  document.body.appendChild(b);
+}
+
 /* ============ INIT ============ */
 applyTheme(Store.get(KEYS.THEME,'light'));
 showView('inicio');
+setTimeout(()=>comprobarActualizacion(true), 1500);
 </script>
 </body>
 </html>

@@ -363,7 +363,7 @@ const Store = {
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
   AUTONOMO:'bitacora_autonomo_reservado', THEME:'bitacora_theme',
   CLIENTES:'bitacora_au_clientes', INGRESOS_AU:'bitacora_au_ingresos', GASTOS_AU:'bitacora_au_gastos',
-  SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key' };
+  SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom' };
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 function applyTheme(t){
@@ -402,6 +402,7 @@ function seedIfEmpty(){
   if(Store.get(KEYS.GASTOS_AU,null)===null) Store.set(KEYS.GASTOS_AU,[]);
   if(Store.get(KEYS.SERVER_URL,null)===null) Store.set(KEYS.SERVER_URL,'https://facturadirecta.onrender.com');
   if(Store.get(KEYS.SERVER_KEY,null)===null) Store.set(KEYS.SERVER_KEY,'VYRK2XOatziOFPJDB6UnGywzTh1H7LWBJ5-gqp4bFJY');
+  if(Store.get(KEYS.CAT_EXPENSE_CUSTOM,null)===null) Store.set(KEYS.CAT_EXPENSE_CUSTOM,[]);
 }
 seedIfEmpty();
 
@@ -419,7 +420,14 @@ const CAT_INCOME = [
   {k:'autonomo', label:'Autónomo', ic:'🧾', color:'var(--green-soft)'},
   {k:'otros_ing', label:'Otros', ic:'💰', color:'var(--green-soft)'},
 ];
-function catInfo(key){ return [...CAT_EXPENSE,...CAT_INCOME].find(c=>c.k===key) || {label:key, ic:'📎', color:'var(--bg)'}; }
+const CAT_COLORES = [
+  {v:'var(--orange-soft)', nombre:'Naranja'},
+  {v:'var(--blue-soft)', nombre:'Azul'},
+  {v:'var(--yellow-soft)', nombre:'Amarillo'},
+  {v:'var(--green-soft)', nombre:'Verde'},
+];
+function catExpenseTodas(){ return CAT_EXPENSE.concat(Store.get(KEYS.CAT_EXPENSE_CUSTOM,[])); }
+function catInfo(key){ return [...catExpenseTodas(),...CAT_INCOME].find(c=>c.k===key) || {label:key, ic:'📎', color:'var(--bg)'}; }
 
 const LOG_TYPES = [
   {k:'aceite', label:'Cambio de aceite', ic:'🛢️'},
@@ -530,7 +538,7 @@ async function generarFacturaReal(ingreso, onEstado){
       ingresos[idx].facturaId = data.id || null;
       Store.set(KEYS.INGRESOS_AU, ingresos);
     }
-    onEstado(`Factura ${data.numero||''} creada${data.sheet_actualizado?' y añadida al libro de Google Sheets':' (aviso: no se pudo actualizar el Sheet)'}.`, false, true);
+    onEstado(`Factura ${data.numero||''} creada${data.sheet_actualizado?' y añadida al libro de Google Sheets':' (aviso: no se pudo actualizar el Sheet — '+(data.sheet_error||'motivo desconocido')+')'}.`, false, true);
   }catch(e){
     onEstado('No he recibido respuesta a tiempo — comprobando si se creó igualmente…', false);
     const encontrada = await buscarFacturaAutomatica(ingreso, cliente);
@@ -789,7 +797,7 @@ function openIngresoSheet(ingresoId){
           const estado = document.getElementById('ing-factura-estado');
           estado.style.color = isError ? 'var(--orange)' : 'var(--text-dim)';
           estado.textContent = msg;
-          if(done){ setTimeout(()=>{ closeSheet(); renderAutonomo(); if(currentView==='finanzas') renderFinanzas(); }, 1200); }
+          if(done){ setTimeout(()=>{ closeSheet(); renderAutonomo(); if(currentView==='finanzas') renderFinanzas(); }, 3500); }
           else if(isError) btn.disabled = false;
         });
       });
@@ -1372,7 +1380,7 @@ function openTxSheet(presetType, presetAmount, presetNote){
     <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
   `;
   function renderCats(){
-    const list = type==='expense'?CAT_EXPENSE:CAT_INCOME;
+    const list = type==='expense'?catExpenseTodas():CAT_INCOME;
     if(!cat || !list.find(c=>c.k===cat)) cat = list[0].k;
     document.getElementById('tx-cats').innerHTML = list.map(c=>`<button class="chip ${c.k===cat?'active':''}" data-k="${c.k}">${c.ic} ${c.label}</button>`).join('');
     document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); }));
@@ -1477,7 +1485,7 @@ document.getElementById('fab').addEventListener('click', ()=>{
 });
 
 /* ============ SETTINGS ============ */
-document.getElementById('settings-btn').addEventListener('click', ()=>{
+function openAjustesSheet(){
   const theme = Store.get(KEYS.THEME,'light');
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>Ajustes</h3>
@@ -1486,6 +1494,10 @@ document.getElementById('settings-btn').addEventListener('click', ()=>{
         <button data-t="light" class="${theme==='light'?'active':''}">☀️ Modo día</button>
         <button data-t="dark" class="${theme==='dark'?'active':''}">🌙 Modo oscuro</button>
       </div>
+    </div>
+    <div class="field"><label>Categorías de gasto (Finanzas)</label>
+      <div id="set-cats-list"></div>
+      <button class="btn btn-outline" id="set-cat-add" style="margin-top:8px;">＋ Añadir categoría</button>
     </div>
     <div class="field"><label>Servidor de facturación</label>
       <input type="text" id="set-server-url" placeholder="https://tu-servidor.onrender.com" value="${Store.get(KEYS.SERVER_URL,'')}">
@@ -1509,6 +1521,8 @@ document.getElementById('settings-btn').addEventListener('click', ()=>{
       document.querySelectorAll('#theme-seg button').forEach(x=>x.classList.toggle('active', x===b));
     });
   });
+  renderCatsSettings();
+  document.getElementById('set-cat-add').addEventListener('click', openAddCategoriaSheet);
   document.getElementById('set-server-save').addEventListener('click', ()=>{
     Store.set(KEYS.SERVER_URL, document.getElementById('set-server-url').value.trim());
     Store.set(KEYS.SERVER_KEY, document.getElementById('set-server-key').value.trim());
@@ -1538,7 +1552,51 @@ document.getElementById('settings-btn').addEventListener('click', ()=>{
     localStorage.clear(); closeSheet(); seedIfEmpty(); showView('inicio');
   });
   overlay.classList.add('show');
-});
+}
+document.getElementById('settings-btn').addEventListener('click', openAjustesSheet);
+
+function renderCatsSettings(){
+  const custom = Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]);
+  const el = document.getElementById('set-cats-list');
+  if(!el) return;
+  el.innerHTML = custom.length ? custom.map(c=>`
+    <div class="row" style="padding:8px 0;">
+      <div class="ico" style="background:${c.color};width:32px;height:32px;font-size:15px;">${c.ic}</div>
+      <div class="meta"><div class="t1" style="font-size:14px;">${c.label}</div></div>
+      <button class="btn-danger" data-del="${c.k}" style="font-size:13px;">Eliminar</button>
+    </div>
+  `).join('') : `<p style="font-size:13px;color:var(--text-dim);margin:6px 0 0;">Solo tienes las categorías por defecto. Añade las tuyas con el botón de abajo.</p>`;
+  el.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', ()=>{
+    Store.set(KEYS.CAT_EXPENSE_CUSTOM, Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]).filter(c=>c.k!==btn.dataset.del));
+    renderCatsSettings();
+  }));
+}
+
+function openAddCategoriaSheet(){
+  let color = CAT_COLORES[0].v;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Nueva categoría de gasto</h3>
+    <div class="field"><label>Emoji</label><input type="text" id="cat-emoji" placeholder="📎" maxlength="4" value="📎"></div>
+    <div class="field"><label>Nombre</label><input type="text" id="cat-nombre" placeholder="Ej. Mascotas"></div>
+    <div class="field"><label>Color</label><div class="chips" id="cat-colores">${CAT_COLORES.map(c=>`<button class="chip" data-v="${c.v}" style="background:${c.v};border-color:transparent;">${c.nombre}</button>`).join('')}</div></div>
+    <div class="actions"><button class="btn btn-primary" id="cat-save">Añadir</button></div>
+  `;
+  document.querySelectorAll('#cat-colores .chip').forEach((ch,i)=>{
+    if(i===0) ch.classList.add('active');
+    ch.addEventListener('click', ()=>{ color = ch.dataset.v; document.querySelectorAll('#cat-colores .chip').forEach(c=>c.classList.toggle('active', c===ch)); });
+  });
+  document.getElementById('cat-save').addEventListener('click', ()=>{
+    const nombre = document.getElementById('cat-nombre').value.trim();
+    if(!nombre){ document.getElementById('cat-nombre').focus(); return; }
+    const emoji = document.getElementById('cat-emoji').value.trim() || '📎';
+    const k = 'custom_'+nombre.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi,'_')+'_'+uid();
+    const custom = Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]);
+    custom.push({k, label:nombre, ic:emoji, color});
+    Store.set(KEYS.CAT_EXPENSE_CUSTOM, custom);
+    openAjustesSheet();
+  });
+  overlay.classList.add('show');
+}
 
 function exportarCopiaSeguridad(){
   const data = {};

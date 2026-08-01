@@ -103,6 +103,14 @@ p.page-sub{margin:0 0 14px;color:var(--text-dim);font-size:14px;}
 .month-nav .lbl{font-weight:700;font-size:15px;text-transform:capitalize;}
 
 /* ---------- HERO CARD ---------- */
+.hero-carousel{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
+  scrollbar-width:none;border-radius:var(--radius-lg);}
+.hero-carousel::-webkit-scrollbar{display:none;}
+.hero-page{flex:0 0 100%;scroll-snap-align:start;min-width:100%;}
+.hero-page .hero{margin-bottom:0;}
+.hero-dots{display:flex;justify-content:center;gap:6px;margin:10px 0 18px;}
+.hero-dots .dot{width:6px;height:6px;border-radius:50%;background:var(--line);transition:all .2s ease;}
+.hero-dots .dot.active{background:var(--green-deep);width:16px;border-radius:3px;}
 .hero{background:linear-gradient(155deg, var(--hero-from) 0%, var(--hero-to) 100%);border-radius:var(--radius-lg);
   padding:26px 24px 22px;margin-bottom:18px;position:relative;overflow:hidden;box-shadow:var(--shadow);}
 .hero::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 85% -10%, rgba(52,199,123,0.35), transparent 60%);pointer-events:none;}
@@ -320,6 +328,9 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
         <div class="chart-wrap" id="chart-wrap"></div>
       </div>
 
+      <div class="section-head"><h2>Ahorro del mes</h2></div>
+      <div class="card pad" id="fin-ahorro"></div>
+
       <div class="section-head"><h2>Recomendaciones</h2></div>
       <div class="card" id="fin-tips"></div>
 
@@ -378,7 +389,8 @@ const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs',
   AUTONOMO:'bitacora_autonomo_reservado', THEME:'bitacora_theme',
   CLIENTES:'bitacora_au_clientes', INGRESOS_AU:'bitacora_au_ingresos', GASTOS_AU:'bitacora_au_gastos',
   SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom',
-  CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden' };
+  CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden', CAT_INCOME_CUSTOM:'bitacora_cat_income_custom',
+  CAT_INCOME_HIDDEN:'bitacora_cat_income_hidden', CAT_OVERRIDES:'bitacora_cat_overrides' };
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 function applyTheme(t){
@@ -419,6 +431,9 @@ function seedIfEmpty(){
   if(Store.get(KEYS.SERVER_KEY,null)===null) Store.set(KEYS.SERVER_KEY,'VYRK2XOatziOFPJDB6UnGywzTh1H7LWBJ5-gqp4bFJY');
   if(Store.get(KEYS.CAT_EXPENSE_CUSTOM,null)===null) Store.set(KEYS.CAT_EXPENSE_CUSTOM,[]);
   if(Store.get(KEYS.CAT_EXPENSE_HIDDEN,null)===null) Store.set(KEYS.CAT_EXPENSE_HIDDEN,[]);
+  if(Store.get(KEYS.CAT_INCOME_CUSTOM,null)===null) Store.set(KEYS.CAT_INCOME_CUSTOM,[]);
+  if(Store.get(KEYS.CAT_INCOME_HIDDEN,null)===null) Store.set(KEYS.CAT_INCOME_HIDDEN,[]);
+  if(Store.get(KEYS.CAT_OVERRIDES,null)===null) Store.set(KEYS.CAT_OVERRIDES,{});
 }
 seedIfEmpty();
 
@@ -434,7 +449,7 @@ const CAT_EXPENSE = [
 const CAT_INCOME = [
   {k:'nomina', label:'Nómina', ic:'💼', color:'var(--green-soft)'},
   {k:'autonomo', label:'Autónomo', ic:'🧾', color:'var(--green-soft)'},
-  {k:'otros_ing', label:'Otros', ic:'💰', color:'var(--green-soft)'},
+  {k:'otros_ing', label:'Ahorro', ic:'🐷', color:'var(--green-soft)'},
 ];
 const CAT_COLORES = [
   {v:'var(--orange-soft)', nombre:'Naranja'},
@@ -442,11 +457,24 @@ const CAT_COLORES = [
   {v:'var(--yellow-soft)', nombre:'Amarillo'},
   {v:'var(--green-soft)', nombre:'Verde'},
 ];
-function catExpenseTodas(){
-  const ocultas = Store.get(KEYS.CAT_EXPENSE_HIDDEN,[]);
-  return CAT_EXPENSE.filter(c=>!ocultas.includes(c.k)).concat(Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]));
+function catKeys(tipo){
+  return {
+    base: tipo==='income' ? CAT_INCOME : CAT_EXPENSE,
+    custom: tipo==='income' ? KEYS.CAT_INCOME_CUSTOM : KEYS.CAT_EXPENSE_CUSTOM,
+    hidden: tipo==='income' ? KEYS.CAT_INCOME_HIDDEN : KEYS.CAT_EXPENSE_HIDDEN,
+  };
 }
-function catInfo(key){ return [...catExpenseTodas(),...CAT_INCOME].find(c=>c.k===key) || {label:key, ic:'📎', color:'var(--bg)'}; }
+function catList(tipo){
+  const {base, custom, hidden} = catKeys(tipo);
+  const ocultas = Store.get(hidden,[]);
+  const overrides = Store.get(KEYS.CAT_OVERRIDES,{});
+  const conOverride = c => overrides[c.k] ? {...c, ...overrides[c.k]} : c;
+  const fijas = base.filter(c=>!ocultas.includes(c.k)).map(conOverride);
+  const personalizadas = Store.get(custom,[]).map(conOverride);
+  return fijas.concat(personalizadas);
+}
+function catExpenseTodas(){ return catList('expense'); }
+function catInfo(key){ return [...catList('expense'),...catList('income')].find(c=>c.k===key) || {label:key, ic:'📎', color:'var(--bg)'}; }
 
 const LOG_TYPES = [
   {k:'aceite', label:'Cambio de aceite', ic:'🛢️'},
@@ -952,19 +980,57 @@ function monthTotals(offset){
   const tx = Store.get(KEYS.TX,[]);
   const inc = tx.filter(t=>t.type==='income' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
   const exp = tx.filter(t=>t.type==='expense' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
-  return {inc, exp, bal:inc-exp, mk};
+  const baseAhorro = baseAhorroMes(mk);
+  return {inc, exp, bal:inc-exp, mk, baseAhorro, ahorro: baseAhorro-exp};
+}
+function baseAhorroMes(mk){
+  const tx = Store.get(KEYS.TX,[]);
+  const nomina = tx.filter(t=>t.type==='income' && t.category==='nomina' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const autonomoTx = tx.filter(t=>t.type==='income' && t.category==='autonomo' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const autonomoModulo = Store.get(KEYS.INGRESOS_AU,[]).filter(i=>monthKeyOf(i.date)===mk).reduce((s,i)=>s+ingresoNeto(i),0);
+  return nomina + autonomoTx + autonomoModulo;
+}
+function ahorroTotalAcumulado(){
+  const tx = Store.get(KEYS.TX,[]);
+  const nomina = tx.filter(t=>t.type==='income' && t.category==='nomina').reduce((s,t)=>s+t.amount,0);
+  const autonomoTx = tx.filter(t=>t.type==='income' && t.category==='autonomo').reduce((s,t)=>s+t.amount,0);
+  const autonomoModulo = Store.get(KEYS.INGRESOS_AU,[]).reduce((s,i)=>s+ingresoNeto(i),0);
+  const gastos = tx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  return {nomina, autonomo: autonomoTx+autonomoModulo, gastos, total: nomina+autonomoTx+autonomoModulo-gastos};
 }
 function heroHTML(t){
-  const pct = t.inc>0 ? Math.round(t.bal/t.inc*100) : 0;
-  return `<div class="hero">
-    <div class="eyebrow">Balance</div>
-    <div class="big ${t.bal<0?'neg':''} num">${fmtEUR(t.bal)}</div>
-    <div class="pill-center"><div class="pill">${pct}% de tus ingresos</div></div>
-    <div class="split">
-      <div><div class="lbl">Ingresos</div><div class="val inc num">${fmtEUR(t.inc)}</div></div>
-      <div><div class="lbl">Gastos</div><div class="val exp num">${fmtEUR(t.exp)}</div></div>
-    </div>
-  </div>`;
+  const pct = t.baseAhorro>0 ? Math.round(t.ahorro/t.baseAhorro*100) : 0;
+  const total = ahorroTotalAcumulado();
+  return `<div class="hero-carousel" id="hero-carousel">
+    <div class="hero-page"><div class="hero">
+      <div class="eyebrow">Balance del mes</div>
+      <div class="big ${t.bal<0?'neg':''} num">${fmtEUR(t.bal)}</div>
+      <div class="pill-center"><div class="pill">${pct}% de ahorro (nómina + autónomo)</div></div>
+      <div class="split">
+        <div><div class="lbl">Ingresos</div><div class="val inc num">${fmtEUR(t.inc)}</div></div>
+        <div><div class="lbl">Gastos</div><div class="val exp num">${fmtEUR(t.exp)}</div></div>
+      </div>
+    </div></div>
+    <div class="hero-page"><div class="hero">
+      <div class="eyebrow">Balance total (desde siempre)</div>
+      <div class="big ${total.total<0?'neg':''} num">${fmtEUR(total.total)}</div>
+      <div class="pill-center"><div class="pill">Nómina + autónomo − gastos, acumulado</div></div>
+      <div class="split">
+        <div><div class="lbl">Nómina</div><div class="val inc num">${fmtEUR(total.nomina)}</div></div>
+        <div><div class="lbl">Autónomo</div><div class="val inc num">${fmtEUR(total.autonomo)}</div></div>
+      </div>
+    </div></div>
+  </div>
+  <div class="hero-dots"><span class="dot active"></span><span class="dot"></span></div>`;
+}
+function wireHeroCarousel(){
+  const car = document.getElementById('hero-carousel');
+  if(!car) return;
+  const dots = document.querySelectorAll('.hero-dots .dot');
+  car.addEventListener('scroll', ()=>{
+    const idx = Math.round(car.scrollLeft / car.clientWidth);
+    dots.forEach((d,i)=>d.classList.toggle('active', i===idx));
+  }, {passive:true});
 }
 function renderHeader(){
   const title = document.getElementById('pg-title');
@@ -994,6 +1060,7 @@ function renderHeader(){
     title.textContent = 'Autónomo';
     sub.textContent = 'Clientes, ingresos y facturación';
   }
+  wireHeroCarousel();
 }
 
 /* ============ INICIO ============ */
@@ -1022,10 +1089,11 @@ function renderInicio(){
   const tx = Store.get(KEYS.TX,[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4);
   document.getElementById('ini-movs').innerHTML = tx.length ? tx.map(t=>{
     const info = catInfo(t.category);
-    return `<div class="row"><div class="ico" style="background:${info.color}">${info.ic}</div>
+    return `<div class="row" data-tx="${t.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
       <div class="meta"><div class="t1">${info.label}</div><div class="t2">${t.note?t.note:fmtDate(t.date)}</div></div>
       <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div></div></div>`;
   }).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin movimientos</div><div class="d">Regístralos con el botón +</div></div>`;
+  document.querySelectorAll('#ini-movs [data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
 }
 
 /* ============ FINANZAS ============ */
@@ -1121,7 +1189,35 @@ function renderTips(){
     : `<div class="empty"><span class="icn illo">${ILLO_TIPS}</span><div class="t">Aún sin recomendaciones</div><div class="d">Registra unos movimientos y aparecerán aquí</div></div>`;
 }
 
+function renderAhorro(){
+  const mk = monthKeyOf(new Date());
+  const tx = Store.get(KEYS.TX,[]);
+  const nomina = tx.filter(t=>t.type==='income' && t.category==='nomina' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const autonomoTx = tx.filter(t=>t.type==='income' && t.category==='autonomo' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const autonomoModulo = Store.get(KEYS.INGRESOS_AU,[]).filter(i=>monthKeyOf(i.date)===mk).reduce((s,i)=>s+ingresoNeto(i),0);
+  const base = nomina + autonomoTx + autonomoModulo;
+  const exp = tx.filter(t=>t.type==='expense' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const ahorro = base - exp;
+  const pct = base>0 ? Math.round(ahorro/base*100) : 0;
+  const el = document.getElementById('fin-ahorro');
+  if(!el) return;
+  if(base<=0){
+    el.innerHTML = `<div class="empty"><span class="icn">💰</span><div class="t">Sin nómina ni ingresos de autónomo este mes</div><div class="d">El ahorro se calcula solo sobre esos dos, no sobre "Otros" ingresos</div></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div class="num" style="font-size:26px;color:${ahorro<0?'var(--orange)':'var(--green-deep)'};">${fmtEUR(ahorro)}</div>
+      <div class="badge ${ahorro<0?'warn':''}">${pct}%</div>
+    </div>
+    <div class="bd-row"><div class="name">💼 Nómina</div><div class="track"><div class="fill" style="width:${base?Math.round(nomina/base*100):0}%;background:var(--green);"></div></div><div class="amt num">${fmtEUR(nomina)}</div></div>
+    <div class="bd-row"><div class="name">🧾 Autónomo</div><div class="track"><div class="fill" style="width:${base?Math.round((autonomoTx+autonomoModulo)/base*100):0}%;background:var(--green);"></div></div><div class="amt num">${fmtEUR(autonomoTx+autonomoModulo)}</div></div>
+    <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">Base de cálculo: ${fmtEUR(base)} (nómina + autónomo, sin contar ingresos "Otros"). Gastos del mes: ${fmtEUR(exp)}.</p>
+  `;
+}
+
 function renderFinanzas(){
+  renderAhorro();
   document.querySelectorAll('#evo-source-seg button').forEach(b=>{
     b.classList.toggle('active', b.dataset.s===evoSource);
     b.onclick = ()=>{ evoSource=b.dataset.s; renderFinanzas(); };
@@ -1144,12 +1240,13 @@ function renderFinanzas(){
     const shown = showAllTx ? tx : tx.slice(0,5);
     listEl.innerHTML = shown.map(t=>{
       const info = catInfo(t.category);
-      return `<div class="row">
+      return `<div class="row" data-tx="${t.id}" style="cursor:pointer;">
         <div class="ico" style="background:${info.color}">${info.ic}</div>
         <div class="meta"><div class="t1">${info.label}</div><div class="t2">${t.note ? t.note : fmtDate(t.date)}</div></div>
         <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div><div class="date">${fmtDate(t.date)}</div></div>
       </div>`;
     }).join('');
+    listEl.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
   }
 
   const cur = monthTotals(financeMonthOffset);
@@ -1388,21 +1485,24 @@ function wirePhotoField(idPrefix, onChange){
   return ()=>dataUrl;
 }
 
-function openTxSheet(presetType, presetAmount, presetNote){
-  let type = presetType || 'expense'; let cat = null;
+function openTxSheet(presetType, presetAmount, presetNote, txId){
+  const existing = txId ? Store.get(KEYS.TX,[]).find(x=>x.id===txId) : null;
+  let type = existing ? existing.type : (presetType || 'expense');
+  let cat = existing ? existing.category : null;
   sheetEl.innerHTML = `
-    <div class="handle"></div><h3>Nuevo movimiento</h3>
+    <div class="handle"></div><h3>${existing?'Editar movimiento':'Nuevo movimiento'}</h3>
     <div class="field"><div class="seg" id="type-seg">
       <button data-t="expense" class="${type==='expense'?'active':''}">Gasto</button>
       <button data-t="income" class="${type==='income'?'active':''}">Ingreso</button>
     </div></div>
-    <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="tx-amount" placeholder="0,00" value="${presetAmount!=null?presetAmount:''}"></div>
+    <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="tx-amount" placeholder="0,00" value="${existing?existing.amount:(presetAmount!=null?presetAmount:'')}"></div>
     <div class="field"><label>Categoría</label><div class="chips" id="tx-cats"></div></div>
-    <div class="field"><label>Nota (opcional)</label><input type="text" id="tx-note" placeholder="Ej. Cena con Marta" value="${presetNote?presetNote.replace(/"/g,'&quot;'):''}"></div>
+    <div class="field"><label>Nota (opcional)</label><input type="text" id="tx-note" placeholder="Ej. Cena con Marta" value="${existing?(existing.note||'').replace(/"/g,'&quot;'):(presetNote?presetNote.replace(/"/g,'&quot;'):'')}"></div>
     <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
+    ${existing?`<div style="text-align:center;"><button class="btn-danger" id="tx-delete">Eliminar movimiento</button></div>`:''}
   `;
   function renderCats(){
-    const list = type==='expense'?catExpenseTodas():CAT_INCOME;
+    const list = type==='expense'?catList('expense'):catList('income');
     if(!cat || !list.find(c=>c.k===cat)) cat = list[0].k;
     document.getElementById('tx-cats').innerHTML = list.map(c=>`<button class="chip ${c.k===cat?'active':''}" data-k="${c.k}">${c.ic} ${c.label}</button>`).join('');
     document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); }));
@@ -1415,13 +1515,29 @@ function openTxSheet(presetType, presetAmount, presetNote){
     const amt = parseFloat(document.getElementById('tx-amount').value);
     if(!amt || amt<=0){ document.getElementById('tx-amount').focus(); return; }
     const tx = Store.get(KEYS.TX,[]);
-    tx.push({id:uid(), type, amount:amt, category:cat, note:document.getElementById('tx-note').value.trim(), date:todayISO()});
+    const note = document.getElementById('tx-note').value.trim();
+    if(existing){
+      const idx = tx.findIndex(x=>x.id===existing.id);
+      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note};
+    } else {
+      tx.push({id:uid(), type, amount:amt, category:cat, note, date:todayISO()});
+    }
     Store.set(KEYS.TX, tx);
     closeSheet();
     if(currentView==='inicio') renderInicio();
     if(currentView==='finanzas') renderFinanzas();
     renderHeader();
   });
+  if(existing){
+    document.getElementById('tx-delete').addEventListener('click', ()=>{
+      if(!confirm('¿Eliminar este movimiento? No se puede deshacer.')) return;
+      Store.set(KEYS.TX, Store.get(KEYS.TX,[]).filter(x=>x.id!==existing.id));
+      closeSheet();
+      if(currentView==='inicio') renderInicio();
+      if(currentView==='finanzas') renderFinanzas();
+      renderHeader();
+    });
+  }
   overlay.classList.add('show');
   setTimeout(()=>document.getElementById('tx-amount').focus(), 300);
 }
@@ -1518,8 +1634,12 @@ function openAjustesSheet(){
       </div>
     </div>
     <div class="field"><label>Categorías de gasto (Finanzas)</label>
-      <div id="set-cats-list"></div>
-      <button class="btn btn-outline" id="set-cat-add" style="margin-top:8px;">＋ Añadir categoría</button>
+      <div id="set-cats-list-expense"></div>
+      <button class="btn btn-outline" id="set-cat-add-expense" style="margin-top:8px;">＋ Añadir categoría</button>
+    </div>
+    <div class="field"><label>Categorías de ingreso (Finanzas)</label>
+      <div id="set-cats-list-income"></div>
+      <button class="btn btn-outline" id="set-cat-add-income" style="margin-top:8px;">＋ Añadir categoría</button>
     </div>
     <div class="field"><label>Servidor de facturación</label>
       <input type="text" id="set-server-url" placeholder="https://tu-servidor.onrender.com" value="${Store.get(KEYS.SERVER_URL,'')}">
@@ -1543,8 +1663,10 @@ function openAjustesSheet(){
       document.querySelectorAll('#theme-seg button').forEach(x=>x.classList.toggle('active', x===b));
     });
   });
-  renderCatsSettings();
-  document.getElementById('set-cat-add').addEventListener('click', openAddCategoriaSheet);
+  renderCatsSettings('expense');
+  renderCatsSettings('income');
+  document.getElementById('set-cat-add-expense').addEventListener('click', ()=>openAddCategoriaSheet('expense'));
+  document.getElementById('set-cat-add-income').addEventListener('click', ()=>openAddCategoriaSheet('income'));
   document.getElementById('set-server-save').addEventListener('click', ()=>{
     Store.set(KEYS.SERVER_URL, document.getElementById('set-server-url').value.trim());
     Store.set(KEYS.SERVER_KEY, document.getElementById('set-server-key').value.trim());
@@ -1577,44 +1699,51 @@ function openAjustesSheet(){
 }
 document.getElementById('settings-btn').addEventListener('click', openAjustesSheet);
 
-function renderCatsSettings(){
-  const ocultas = Store.get(KEYS.CAT_EXPENSE_HIDDEN,[]);
-  const fijas = CAT_EXPENSE.filter(c=>!ocultas.includes(c.k));
-  const custom = Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]);
-  const el = document.getElementById('set-cats-list');
+function renderCatsSettings(tipo){
+  const {base, custom: customKey, hidden: hiddenKey} = catKeys(tipo);
+  const ocultas = Store.get(hiddenKey,[]);
+  const overrides = Store.get(KEYS.CAT_OVERRIDES,{});
+  const conOverride = c => overrides[c.k] ? {...c, ...overrides[c.k]} : c;
+  const fijas = base.filter(c=>!ocultas.includes(c.k)).map(conOverride);
+  const custom = Store.get(customKey,[]).map(conOverride);
+  const el = document.getElementById(tipo==='income'?'set-cats-list-income':'set-cats-list-expense');
   if(!el) return;
   const fila = (c, esFija) => `
     <div class="row" style="padding:8px 0;">
       <div class="ico" style="background:${c.color};width:32px;height:32px;font-size:15px;">${c.ic}</div>
       <div class="meta"><div class="t1" style="font-size:14px;">${c.label}${esFija?' <span style="color:var(--text-dim);font-size:11px;">(por defecto)</span>':''}</div></div>
+      <button class="pencil" data-edit="${c.k}" data-fija="${esFija?1:0}" style="font-size:15px;">✏️</button>
       <button class="btn-danger" data-del="${c.k}" style="font-size:13px;">Eliminar</button>
     </div>`;
   el.innerHTML = fijas.map(c=>fila(c,true)).join('') + custom.map(c=>fila(c,false)).join('');
   if(ocultas.length){
-    el.innerHTML += `<button class="btn btn-outline" id="cat-restaurar" style="margin-top:8px;font-size:13px;">↺ Restaurar categorías por defecto eliminadas</button>`;
+    el.innerHTML += `<button class="btn btn-outline" data-restaurar-tipo="${tipo}" style="margin-top:8px;font-size:13px;">↺ Restaurar categorías por defecto eliminadas</button>`;
   }
+  el.querySelectorAll('[data-edit]').forEach(btn=>btn.addEventListener('click', ()=>{
+    openEditCategoriaSheet(tipo, btn.dataset.edit, btn.dataset.fija==='1');
+  }));
   el.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', ()=>{
     const k = btn.dataset.del;
-    if(CAT_EXPENSE.some(c=>c.k===k)){
-      const oc = Store.get(KEYS.CAT_EXPENSE_HIDDEN,[]);
+    if(base.some(c=>c.k===k)){
+      const oc = Store.get(hiddenKey,[]);
       if(!oc.includes(k)) oc.push(k);
-      Store.set(KEYS.CAT_EXPENSE_HIDDEN, oc);
+      Store.set(hiddenKey, oc);
     } else {
-      Store.set(KEYS.CAT_EXPENSE_CUSTOM, Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]).filter(c=>c.k!==k));
+      Store.set(customKey, Store.get(customKey,[]).filter(c=>c.k!==k));
     }
-    renderCatsSettings();
+    renderCatsSettings(tipo);
   }));
-  const btnRestaurar = document.getElementById('cat-restaurar');
+  const btnRestaurar = el.querySelector('[data-restaurar-tipo]');
   if(btnRestaurar) btnRestaurar.addEventListener('click', ()=>{
-    Store.set(KEYS.CAT_EXPENSE_HIDDEN, []);
-    renderCatsSettings();
+    Store.set(hiddenKey, []);
+    renderCatsSettings(tipo);
   });
 }
 
-function openAddCategoriaSheet(){
+function openAddCategoriaSheet(tipo){
   let color = CAT_COLORES[0].v;
   sheetEl.innerHTML = `
-    <div class="handle"></div><h3>Nueva categoría de gasto</h3>
+    <div class="handle"></div><h3>Nueva categoría de ${tipo==='income'?'ingreso':'gasto'}</h3>
     <div class="field"><label>Emoji</label><input type="text" id="cat-emoji" placeholder="📎" maxlength="4" value="📎"></div>
     <div class="field"><label>Nombre</label><input type="text" id="cat-nombre" placeholder="Ej. Mascotas"></div>
     <div class="field"><label>Color</label><div class="chips" id="cat-colores">${CAT_COLORES.map(c=>`<button class="chip" data-v="${c.v}" style="background:${c.v};border-color:transparent;">${c.nombre}</button>`).join('')}</div></div>
@@ -1629,9 +1758,43 @@ function openAddCategoriaSheet(){
     if(!nombre){ document.getElementById('cat-nombre').focus(); return; }
     const emoji = document.getElementById('cat-emoji').value.trim() || '📎';
     const k = 'custom_'+nombre.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi,'_')+'_'+uid();
-    const custom = Store.get(KEYS.CAT_EXPENSE_CUSTOM,[]);
+    const {custom: customKey} = catKeys(tipo);
+    const custom = Store.get(customKey,[]);
     custom.push({k, label:nombre, ic:emoji, color});
-    Store.set(KEYS.CAT_EXPENSE_CUSTOM, custom);
+    Store.set(customKey, custom);
+    openAjustesSheet();
+  });
+  overlay.classList.add('show');
+}
+
+function openEditCategoriaSheet(tipo, key, esFija){
+  const actual = catList(tipo).find(c=>c.k===key);
+  if(!actual) return;
+  let color = actual.color;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Editar categoría</h3>
+    <div class="field"><label>Emoji</label><input type="text" id="cat-emoji" maxlength="4" value="${actual.ic}"></div>
+    <div class="field"><label>Nombre</label><input type="text" id="cat-nombre" value="${actual.label}"></div>
+    <div class="field"><label>Color</label><div class="chips" id="cat-colores">${CAT_COLORES.map(c=>`<button class="chip ${c.v===color?'active':''}" data-v="${c.v}" style="background:${c.v};border-color:transparent;">${c.nombre}</button>`).join('')}</div></div>
+    <div class="actions"><button class="btn btn-primary" id="cat-save">Guardar cambios</button></div>
+  `;
+  document.querySelectorAll('#cat-colores .chip').forEach(ch=>{
+    ch.addEventListener('click', ()=>{ color = ch.dataset.v; document.querySelectorAll('#cat-colores .chip').forEach(c=>c.classList.toggle('active', c===ch)); });
+  });
+  document.getElementById('cat-save').addEventListener('click', ()=>{
+    const nombre = document.getElementById('cat-nombre').value.trim();
+    if(!nombre){ document.getElementById('cat-nombre').focus(); return; }
+    const emoji = document.getElementById('cat-emoji').value.trim() || actual.ic;
+    if(esFija){
+      const overrides = Store.get(KEYS.CAT_OVERRIDES,{});
+      overrides[key] = {label:nombre, ic:emoji, color};
+      Store.set(KEYS.CAT_OVERRIDES, overrides);
+    } else {
+      const {custom: customKey} = catKeys(tipo);
+      const custom = Store.get(customKey,[]);
+      const idx = custom.findIndex(c=>c.k===key);
+      if(idx>-1){ custom[idx] = {...custom[idx], label:nombre, ic:emoji, color}; Store.set(customKey, custom); }
+    }
     openAjustesSheet();
   });
   overlay.classList.add('show');

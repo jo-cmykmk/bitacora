@@ -1733,4 +1733,1111 @@ function openEditCarteraElemento(elId){
     </div>` : ''}
     <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">Usa "Aportar" cuando metas dinero de verdad (se descuenta de Finanzas). Usa "Corregir" solo para ajustar la cifra a como esté el mercado ahora, o arreglar un error — eso no mueve dinero de ningún sitio.</p>
   `;
-  document.getElementById('ce-editar-ficha').addEventListener('click', ()=>
+  document.getElementById('ce-editar-ficha').addEventListener('click', ()=>openEditCarteraMeta(elId));
+  if(esAccion){
+    if(puedeSubir) document.getElementById('ce-subir').addEventListener('click', ()=>{ moverElementoCartera(elId,'up'); closeSheet(); renderCarteraDetalle(); });
+    if(puedeBajar) document.getElementById('ce-bajar').addEventListener('click', ()=>{ moverElementoCartera(elId,'down'); closeSheet(); renderCarteraDetalle(); });
+  }
+  document.getElementById('ce-aportar').addEventListener('click', ()=>{
+    sheetEl.innerHTML = `
+      <div class="handle"></div><h3>Aportar a ${e.nombre}</h3>
+      <div class="field"><label>Importe a aportar</label><input type="number" inputmode="decimal" class="amount" id="ce-aporte" placeholder="0,00"></div>
+      <div class="actions"><button class="btn btn-primary" id="ce-aporte-siguiente">Siguiente</button></div>
+    `;
+    document.getElementById('ce-aporte-siguiente').addEventListener('click', ()=>{
+      const aporte = parseFloat(document.getElementById('ce-aporte').value);
+      if(!aporte || aporte<=0){ document.getElementById('ce-aporte').focus(); return; }
+      preguntarSiCrearGasto(aporte, e.nombre, (crear)=>{
+        if(crear){
+          preguntarOrigenCartera(aporte, (origen)=>{
+            guardarCambioCartera(elId, (e.importe||0)+aporte, aporte, origen, e.nombre);
+          });
+        } else {
+          guardarCambioCartera(elId, (e.importe||0)+aporte, 0, null, e.nombre);
+        }
+      });
+    });
+  });
+  document.getElementById('ce-actualizar').addEventListener('click', ()=>{
+    sheetEl.innerHTML = `
+      <div class="handle"></div><h3>Corregir valor de ${e.nombre}</h3>
+      <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">Esto solo ajusta la cifra mostrada — no crea ningún movimiento en Finanzas.</p>
+      <div class="field"><label>Nuevo valor</label><input type="number" inputmode="decimal" class="amount" id="ce-importe" value="${e.importe||0}"></div>
+      <div class="actions"><button class="btn btn-primary" id="ce-save">Guardar</button></div>
+    `;
+    document.getElementById('ce-save').addEventListener('click', ()=>{
+      const nuevo = parseFloat(document.getElementById('ce-importe').value);
+      if(isNaN(nuevo) || nuevo<0){ document.getElementById('ce-importe').focus(); return; }
+      guardarCambioCartera(elId, nuevo, 0, null, e.nombre);
+    });
+  });
+  overlay.classList.add('show');
+}
+function preguntarSiCrearGasto(aporte, nombreElemento, onRespuesta){
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>¿Registrar como gasto?</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">¿Quieres que ${fmtEUR(aporte)} a ${nombreElemento} se registre también como un gasto de "Inversión" en Finanzas?</p>
+    <div class="actions" style="flex-direction:column;gap:10px;">
+      <button class="btn btn-primary" id="crear-si">Sí, créalo</button>
+      <button class="btn btn-outline" id="crear-no">No, solo actualiza el valor</button>
+    </div>
+  `;
+  document.getElementById('crear-si').addEventListener('click', ()=>onRespuesta(true));
+  document.getElementById('crear-no').addEventListener('click', ()=>onRespuesta(false));
+  overlay.classList.add('show');
+}
+function preguntarOrigenCartera(delta, onElegido){
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>¿De dónde sale este dinero?</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">Vas a aportar ${fmtEUR(delta)} a la cartera. Se registrará como un gasto de "Inversión" y se descontará del balance correspondiente.</p>
+    <div class="actions" style="flex-direction:column;gap:10px;">
+      <button class="btn btn-primary" id="origen-nomina">💼 De mi nómina</button>
+      <button class="btn btn-secondary" id="origen-autonomo">🧾 De lo que gano como autónomo</button>
+    </div>
+  `;
+  document.getElementById('origen-nomina').addEventListener('click', ()=>onElegido('nomina'));
+  document.getElementById('origen-autonomo').addEventListener('click', ()=>onElegido('autonomo'));
+  overlay.classList.add('show');
+}
+function guardarCambioCartera(elId, nuevoImporte, delta, origen, nombreElemento){
+  const elementos = Store.get(KEYS.CARTERA,[]);
+  const idx = elementos.findIndex(x=>x.id===elId);
+  if(idx>-1){ elementos[idx].importe = nuevoImporte; Store.set(KEYS.CARTERA, elementos); }
+  if(origen && delta>0.004){
+    const tx = Store.get(KEYS.TX,[]);
+    tx.push({
+      id:uid(), type:'expense', amount:Math.round(delta*100)/100, category:'inversion',
+      note:`Aportación a ${nombreElemento} (origen: ${origen==='nomina'?'Nómina':'Autónomo'})`,
+      origenCartera: origen, recurrente:false, vehiculoId:null, date:todayISO()
+    });
+    Store.set(KEYS.TX, tx);
+  }
+  closeSheet();
+  renderCarteraDetalle();
+  renderHeader();
+}
+
+function renderRecurrentes(){
+  const el = document.getElementById('fin-recurrentes');
+  if(!el) return;
+  const tx = Store.get(KEYS.TX,[]).filter(t=>t.recurrente);
+  if(!tx.length){
+    el.innerHTML = `<div class="empty"><span class="icn">🔁</span><div class="t">Sin gastos fijos identificados todavía</div><div class="d">Marca la casilla "Es recurrente" al registrar uno (alquiler, seguros, suscripciones...) y aquí se irán agrupando.</div></div>`;
+    return;
+  }
+  // Nos quedamos con la ocurrencia más reciente de cada gasto fijo (agrupado por nota, o por categoría si no hay nota)
+  const grupos = {};
+  tx.forEach(t=>{
+    const clave = (t.note && t.note.trim()) ? t.note.trim().toLowerCase() : 'cat:'+t.category;
+    if(!grupos[clave] || new Date(t.date) > new Date(grupos[clave].date)) grupos[clave] = t;
+  });
+  const items = Object.values(grupos).sort((a,b)=>b.amount-a.amount);
+  const totalGastos = items.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const totalIngresos = items.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  el.innerHTML = `
+    <div class="row" style="border-bottom:1px solid var(--line);">
+      <div class="meta"><div class="t1">Total fijo mensual</div><div class="t2">${items.length} identificado${items.length===1?'':'s'}</div></div>
+      <div class="side"><div class="amt num" style="color:var(--orange);">${fmtEUR(totalGastos)}</div>${totalIngresos?`<div class="t2 num" style="color:var(--green-deep);">+${fmtEUR(totalIngresos)}</div>`:''}</div>
+    </div>
+    ${items.map(t=>{
+      const info = catInfo(t.category);
+      return `<div class="row" data-tx="${t.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
+        <div class="meta"><div class="t1">${t.note || info.label}</div><div class="t2">${info.label} · último: ${fmtDate(t.date)}</div></div>
+        <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div></div></div>`;
+    }).join('')}
+  `;
+  el.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
+}
+
+function renderAhorro(){
+  const mk = monthKeyOf(new Date());
+  const tx = Store.get(KEYS.TX,[]);
+  const nomina = tx.filter(t=>t.type==='income' && t.category==='nomina' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const autonomoTx = tx.filter(t=>t.type==='income' && t.category==='autonomo' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const autonomoModulo = Store.get(KEYS.INGRESOS_AU,[]).filter(i=>monthKeyOf(i.date)===mk).reduce((s,i)=>s+ingresoNeto(i),0);
+  const base = nomina + autonomoTx + autonomoModulo;
+  const exp = tx.filter(t=>t.type==='expense' && monthKeyOf(t.date)===mk).reduce((s,t)=>s+t.amount,0);
+  const ahorro = base - exp;
+  const pct = base>0 ? Math.round(ahorro/base*100) : 0;
+  const el = document.getElementById('fin-ahorro');
+  if(!el) return;
+  if(base<=0){
+    el.innerHTML = `<div class="empty"><span class="icn">💰</span><div class="t">Sin nómina ni ingresos de autónomo este mes</div><div class="d">El ahorro se calcula solo sobre esos dos, no sobre "Otros" ingresos</div></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div class="num" style="font-size:26px;color:${ahorro<0?'var(--orange)':'var(--green-deep)'};">${fmtEUR(ahorro)}</div>
+      <div class="badge ${ahorro<0?'warn':''}">${pct}%</div>
+    </div>
+    <div class="bd-row"><div class="name">💼 Nómina</div><div class="track"><div class="fill" style="width:${base?Math.round(nomina/base*100):0}%;background:var(--green);"></div></div><div class="amt num">${fmtEUR(nomina)}</div></div>
+    <div class="bd-row"><div class="name">🧾 Autónomo</div><div class="track"><div class="fill" style="width:${base?Math.round((autonomoTx+autonomoModulo)/base*100):0}%;background:var(--green);"></div></div><div class="amt num">${fmtEUR(autonomoTx+autonomoModulo)}</div></div>
+    <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">Base de cálculo: ${fmtEUR(base)} (nómina + autónomo, sin contar ingresos "Otros"). Gastos del mes: ${fmtEUR(exp)}.</p>
+  `;
+}
+
+let finVista = 'menu'; // 'menu' | 'cartera' | 'evolucion' | 'ahorro' | 'recurrentes' | 'recomendaciones' | 'categoria' | 'movimientos' | 'categoria-filtro'
+let finCategoriaFiltro = null;
+
+function renderFinanzas(){
+  const mainWrap = document.getElementById('fin-main-wrap');
+  const carteraWrap = document.getElementById('fin-cartera-wrap');
+  const detailWrap = document.getElementById('fin-detail-wrap');
+  mainWrap.style.display = finVista==='menu' ? 'block' : 'none';
+  carteraWrap.style.display = finVista==='cartera' ? 'block' : 'none';
+  detailWrap.style.display = (finVista!=='menu' && finVista!=='cartera') ? 'block' : 'none';
+  if(finVista==='menu') renderFinMenu();
+  else if(finVista==='cartera') renderCarteraDetalle();
+  else if(finVista==='categoria-filtro') renderCategoriaFiltro();
+  else renderFinDetail(finVista);
+}
+function irAFinVista(v){ finVista=v; renderFinanzas(); }
+function irACategoriaFiltro(cat){ finCategoriaFiltro=cat; finVista='categoria-filtro'; renderFinanzas(); }
+function openCartera(){ irAFinVista('cartera'); }
+function closeCartera(){ irAFinVista('menu'); }
+
+const FIN_MENU_META = [
+  {tipo:'evolucion', ic:'📈', titulo:'Evolución'},
+  {tipo:'cartera', ic:'📊', titulo:'Cartera de inversión'},
+  {tipo:'ahorro', ic:'💰', titulo:'Ahorro del mes'},
+  {tipo:'recurrentes', ic:'🔁', titulo:'Gastos fijos'},
+  {tipo:'recomendaciones', ic:'💡', titulo:'Recomendaciones'},
+  {tipo:'categoria', ic:'🗂️', titulo:'Por categoría'},
+  {tipo:'movimientos', ic:'🧾', titulo:'Movimientos'},
+];
+function finMenuOrdenCompleto(){
+  const guardado = Store.get(KEYS.FIN_MENU_ORDEN, []);
+  const todos = FIN_MENU_META.map(m=>m.tipo);
+  const valido = guardado.filter(t=>todos.includes(t));
+  todos.forEach(t=>{ if(!valido.includes(t)) valido.push(t); }); // por si se añade una sección nueva en el futuro
+  return valido;
+}
+function renderFinMenu(){
+  const el = document.getElementById('fin-menu');
+  const cur = monthTotals(financeMonthOffset);
+  const ahorroMes = baseAhorroMes(cur.mk) - cur.exp;
+  const recFijos = Store.get(KEYS.TX,[]).filter(t=>t.recurrente);
+  const totalFijos = new Set(recFijos.map(t=>(t.note&&t.note.trim())||('cat:'+t.category))).size;
+  const totalFijosImp = (()=>{ const g={}; recFijos.forEach(t=>{ const k=(t.note&&t.note.trim())||('cat:'+t.category); if(!g[k]||new Date(t.date)>new Date(g[k].date)) g[k]=t; }); return Object.values(g).filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0); })();
+  const nTips = renderTipsData().length;
+  const catTop = (()=>{ const tx=Store.get(KEYS.TX,[]).filter(t=>t.type==='expense'&&monthKeyOf(t.date)===cur.mk); if(!tx.length) return null; const g={}; tx.forEach(t=>g[t.category]=(g[t.category]||0)+t.amount); return Object.entries(g).sort((a,b)=>b[1]-a[1])[0]; })();
+  const nMovs = Store.get(KEYS.TX,[]).filter(t=>monthKeyOf(t.date)===cur.mk).length;
+
+  const items = [
+    {tipo:'evolucion', ic:'📈', color:'var(--blue-soft)', titulo:'Evolución', sub:'Ingresos y gastos en el tiempo'},
+    {tipo:'cartera', ic:'📊', color:'var(--blue-soft)', titulo:'Cartera de inversión', sub:fmtEUR(carteraTotal())},
+    {tipo:'ahorro', ic:'💰', color:'var(--green-soft)', titulo:'Ahorro del mes', sub:fmtEUR(ahorroMes)},
+    {tipo:'recurrentes', ic:'🔁', color:'var(--orange-soft)', titulo:'Gastos fijos', sub: totalFijos? `${fmtEUR(totalFijosImp)} / mes`:'Ninguno todavía'},
+    {tipo:'recomendaciones', ic:'💡', color:'var(--yellow-soft)', titulo:'Recomendaciones', sub: nTips? `${nTips} disponible${nTips===1?'':'s'}`:'Sin novedades'},
+    {tipo:'categoria', ic:'🗂️', color:'var(--blue-soft)', titulo:'Por categoría', sub: catTop? `${catInfo(catTop[0]).label}: ${fmtEUR(catTop[1])}`:'Sin gastos este mes'},
+    {tipo:'movimientos', ic:'🧾', color:'var(--green-soft)', titulo:'Movimientos', sub:`${nMovs} este mes`},
+  ];
+  const orden = finMenuOrdenCompleto();
+  items.sort((a,b)=> orden.indexOf(a.tipo) - orden.indexOf(b.tipo));
+  el.innerHTML = items.map(i=>`
+    <div class="row" data-nav="${i.tipo}" style="cursor:pointer;">
+      <div class="ico" style="background:${i.color}">${i.ic}</div>
+      <div class="meta"><div class="t1">${i.titulo}</div><div class="t2">${i.sub}</div></div>
+      <div class="chev">›</div>
+    </div>`).join('');
+  el.querySelectorAll('[data-nav]').forEach(r=>r.addEventListener('click', ()=>irAFinVista(r.dataset.nav)));
+}
+
+function renderFinDetail(tipo){
+  const wrap = document.getElementById('fin-detail-wrap');
+  const configs = {
+    evolucion: { titulo:'Evolución', body:`
+      <div class="card pad">
+        <div class="seg" id="evo-source-seg" style="margin-bottom:12px;">
+          <button data-s="personal" class="active">Personal</button>
+          <button data-s="autonomo">Autónomo</button>
+          <button data-s="todo">Todo</button>
+        </div>
+        <div class="period-row" id="period-chips"></div>
+        <div class="chart-wrap" id="chart-wrap"></div>
+      </div>`,
+      after: ()=>{
+        document.querySelectorAll('#evo-source-seg button').forEach(b=>{
+          b.classList.toggle('active', b.dataset.s===evoSource);
+          b.onclick = ()=>{ evoSource=b.dataset.s; renderFinDetail('evolucion'); };
+        });
+        document.getElementById('period-chips').innerHTML = PERIODS.map(p=>`<button class="chip ${p.k===evoPeriod?'active':''}" data-p="${p.k}">${p.label}</button>`).join('');
+        document.querySelectorAll('#period-chips .chip').forEach(c=>c.addEventListener('click', ()=>{ evoPeriod=c.dataset.p; renderFinDetail('evolucion'); }));
+        renderChart(evolutionSeries(evoPeriod, evoSource));
+      }
+    },
+    ahorro: { titulo:'Ahorro del mes', body:`<div class="card pad" id="fin-ahorro"></div>`, after: renderAhorro },
+    recurrentes: { titulo:'Gastos fijos', body:`<div class="card" id="fin-recurrentes"></div>`, after: renderRecurrentes },
+    recomendaciones: { titulo:'Recomendaciones', body:`<div class="card" id="fin-tips"></div>`, after: renderTips },
+    categoria: { titulo:'Por categoría', body:`<div class="card" id="fin-breakdown"></div>`, after: renderBreakdown },
+    movimientos: { titulo:'Movimientos', body:`
+      <div class="section-head" style="margin-top:0;"><a id="fin-toggle">Ver todos →</a></div>
+      <div class="card" id="fin-list"></div>`, after: renderMovList },
+  };
+  const c = configs[tipo];
+  wrap.innerHTML = `<button class="back-btn" id="fd-back">‹ Finanzas</button>
+    <h2 style="margin:4px 0 14px;font-size:20px;">${c.titulo}</h2>
+    ${c.body}`;
+  document.getElementById('fd-back').addEventListener('click', closeFinDetail);
+  c.after();
+}
+function closeFinDetail(){ irAFinVista('menu'); }
+
+function renderMovList(){
+  const tx = Store.get(KEYS.TX,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  document.getElementById('fin-toggle').textContent = showAllTx ? '← Ver menos' : 'Ver todos →';
+  document.getElementById('fin-toggle').onclick = ()=>{ showAllTx=!showAllTx; renderFinDetail('movimientos'); };
+  const listEl = document.getElementById('fin-list');
+  if(!tx.length){
+    listEl.innerHTML = `<div class="empty"><span class="icn">🧾</span><div class="t">Sin movimientos</div>
+      <div class="d">Regístralos con el botón +</div></div>`;
+    return;
+  }
+  const shown = showAllTx ? tx : tx.slice(0,5);
+  listEl.innerHTML = shown.map(t=>{
+    const info = catInfo(t.category);
+    return `<div class="row" data-tx="${t.id}" style="cursor:pointer;">
+      <div class="ico" style="background:${info.color}">${info.ic}</div>
+      <div class="meta"><div class="t1">${t.note ? t.note : info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${info.label}</div></div>
+      <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div><div class="date">${fmtDate(t.date)}</div></div>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
+}
+
+function renderBreakdown(){
+  const cur = monthTotals(financeMonthOffset);
+  const tx = Store.get(KEYS.TX,[]);
+  const monthExp = tx.filter(t=>monthKeyOf(t.date)===cur.mk && t.type==='expense');
+  const totalExp = monthExp.reduce((s,t)=>s+t.amount,0) || 1;
+  const byCat = {};
+  monthExp.forEach(t=>{ byCat[t.category]=(byCat[t.category]||0)+t.amount; });
+  const rows = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+  const bEl = document.getElementById('fin-breakdown');
+  bEl.innerHTML = rows.length ? rows.map(([cat,amt])=>{
+    const info = catInfo(cat); const pct = Math.round(amt/totalExp*100);
+    return `<div class="bd-row" data-cat="${cat}" style="cursor:pointer;"><div class="name">${info.ic} ${info.label}</div>
+      <div class="track"><div class="fill" style="width:${pct}%"></div></div>
+      <div class="amt num">${fmtEUR(amt)}</div></div>`;
+  }).join('') : `<div class="empty"><span class="icn">📊</span><div class="t">Sin gastos este mes</div></div>`;
+  bEl.querySelectorAll('[data-cat]').forEach(r=>r.addEventListener('click', ()=>irACategoriaFiltro(r.dataset.cat)));
+}
+
+function renderCategoriaFiltro(){
+  const wrap = document.getElementById('fin-detail-wrap');
+  const cat = finCategoriaFiltro;
+  const info = catInfo(cat);
+  const cur = monthTotals(financeMonthOffset);
+  const tx = Store.get(KEYS.TX,[]).filter(t=>t.type==='expense' && t.category===cat && monthKeyOf(t.date)===cur.mk)
+    .reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const total = tx.reduce((s,t)=>s+t.amount,0);
+  wrap.innerHTML = `
+    <button class="back-btn" id="cf-back">‹ Por categoría</button>
+    <div class="hero" style="margin-bottom:18px;">
+      <div class="eyebrow">${info.ic} ${info.label} · este mes</div>
+      <div class="big num">${fmtEUR(total)}</div>
+      <div class="pill-center"><div class="pill">${tx.length} movimiento${tx.length===1?'':'s'}</div></div>
+    </div>
+    <div class="card">
+      ${tx.length ? tx.map(t=>{
+        const sub = t.subtipoComida ? SUBTIPO_LABELS[t.subtipoComida] : t.subtipoVehiculo ? SUBTIPO_LABELS[t.subtipoVehiculo] : null;
+        return `
+        <div class="row" data-tx="${t.id}" style="cursor:pointer;">
+          <div class="ico" style="background:${info.color}">${info.ic}</div>
+          <div class="meta"><div class="t1">${t.note || info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${fmtDate(t.date)}${sub?' · '+sub:''}</div></div>
+          <div class="side"><div class="amt expense num">−${fmtEUR(t.amount)}</div></div>
+        </div>`;
+      }).join('') : `<div class="empty"><span class="icn">📎</span><div class="t">Sin movimientos</div></div>`}
+    </div>`;
+  document.getElementById('cf-back').addEventListener('click', ()=>irAFinVista('categoria'));
+  wrap.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
+}
+
+/* ============ VEHICULOS ============ */
+const ICON_CAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M3 15.5 4.7 10a2 2 0 0 1 1.9-1.4h10.8a2 2 0 0 1 1.9 1.4L21 15.5"/><path d="M3 15.5h18v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><circle cx="7" cy="16.3" r="1.1"/><circle cx="17" cy="16.3" r="1.1"/></svg>';
+const ICON_MOTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><circle cx="5.5" cy="17" r="2.5"/><circle cx="18.5" cy="17" r="2.5"/><path d="M8 17h5l2.5-5H12l-1.5-3H7"/><path d="M13 12l3-3h3"/></svg>';
+function vehIcon(tipo){ return tipo==='moto' ? ICON_MOTO : ICON_CAR; }
+
+function fuelChain(vehicleId){
+  const fuels = Store.get(KEYS.FUEL,[]).filter(f=>f.vehicleId===vehicleId).sort((a,b)=>a.km-b.km);
+  const consumos = {}; let lastFull = null;
+  fuels.forEach(f=>{
+    if(lastFull && f.lleno){
+      const dist = f.km - lastFull.km;
+      if(dist>0) consumos[f.id] = f.litros/dist*100;
+    }
+    if(f.lleno) lastFull = f;
+  });
+  return consumos;
+}
+function avgConsumption(vehicleId){
+  const c = fuelChain(vehicleId);
+  const vals = Object.values(c);
+  if(!vals.length) return null;
+  const last = vals.slice(-5);
+  return last.reduce((s,v)=>s+v,0)/last.length;
+}
+
+function renderVehiculosList(){
+  document.getElementById('veh-list-wrap').style.display='block';
+  document.getElementById('veh-detail-wrap').style.display='none';
+  const vehs = Store.get(KEYS.VEH,[]);
+  const logs = Store.get(KEYS.LOGS,[]);
+  document.getElementById('veh-list').innerHTML = vehs.map(v=>{
+    const last = logs.filter(l=>l.vehicleId===v.id).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
+    const vWarns = getVehicleWarnings(v, logs);
+    return `<div class="row veh-row" data-id="${v.id}" style="cursor:pointer;">
+      <div class="ico veh-badge">${vehIcon(v.tipo)}</div>
+      <div class="meta"><div class="t1">${v.name} ${vWarns.length?`<span class="badge warn">Revisar ${vWarns[0].label.toLowerCase()}</span>`:''}</div>
+      <div class="t2">${v.km.toLocaleString('es-ES')} km${last? ' · último: '+logInfo(last.tipo).label.toLowerCase() : ' · sin registros'}</div></div>
+      <div class="chev">›</div>
+    </div>`;
+  }).join('');
+  document.querySelectorAll('.veh-row').forEach(c=>c.addEventListener('click', ()=>openVehicleDetail(c.dataset.id)));
+}
+
+document.getElementById('veh-add-btn').addEventListener('click', openAddVehicleSheet);
+
+function openAddVehicleSheet(){
+  let tipo='coche';
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Nuevo vehículo</h3>
+    <div class="field"><label>Nombre</label><input type="text" id="nv-name" placeholder="Ej. Mazda 6"></div>
+    <div class="field"><label>Tipo</label>
+      <div class="seg" id="nv-seg"><button data-t="coche" class="active">Coche</button><button data-t="moto">Moto</button></div>
+    </div>
+    <div class="field"><label>Kilometraje actual</label><input type="number" inputmode="numeric" id="nv-km" placeholder="0"></div>
+    <div class="actions"><button class="btn btn-primary" id="nv-save">Añadir</button></div>
+  `;
+  document.querySelectorAll('#nv-seg button').forEach(b=>b.addEventListener('click', ()=>{
+    tipo=b.dataset.t; document.querySelectorAll('#nv-seg button').forEach(x=>x.classList.toggle('active',x===b));
+  }));
+  document.getElementById('nv-save').addEventListener('click', ()=>{
+    const name = document.getElementById('nv-name').value.trim();
+    if(!name){ document.getElementById('nv-name').focus(); return; }
+    const km = parseInt(document.getElementById('nv-km').value,10) || 0;
+    const vehs = Store.get(KEYS.VEH,[]);
+    vehs.push({id:uid(), name, tipo, km});
+    Store.set(KEYS.VEH, vehs);
+    closeSheet(); renderVehiculosList();
+  });
+  overlay.classList.add('show');
+}
+
+function openEditVehicleSheet(vehId){
+  const vehs = Store.get(KEYS.VEH,[]);
+  const v = vehs.find(x=>x.id===vehId);
+  let tipo = v.tipo;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Editar vehículo</h3>
+    <div class="field"><label>Nombre</label><input type="text" id="ev-name" value="${v.name}"></div>
+    <div class="field"><label>Tipo</label>
+      <div class="seg" id="ev-seg"><button data-t="coche" class="${tipo==='coche'?'active':''}">Coche</button><button data-t="moto" class="${tipo==='moto'?'active':''}">Moto</button></div>
+    </div>
+    <div class="field"><label>Kilometraje actual</label><input type="number" inputmode="numeric" id="ev-km" value="${v.km}"></div>
+    <div class="field"><label>Próxima ITV</label><input type="date" id="ev-itv" value="${v.itvFecha||''}"></div>
+    <div class="field"><label>Próximo seguro</label><input type="date" id="ev-seguro" value="${v.seguroFecha||''}"></div>
+    <div class="actions"><button class="btn btn-primary" id="ev-save">Guardar cambios</button></div>
+    <div style="text-align:center;"><button class="btn-danger" id="ev-delete">Eliminar vehículo</button></div>
+  `;
+  document.querySelectorAll('#ev-seg button').forEach(b=>b.addEventListener('click', ()=>{
+    tipo=b.dataset.t; document.querySelectorAll('#ev-seg button').forEach(x=>x.classList.toggle('active',x===b));
+  }));
+  document.getElementById('ev-save').addEventListener('click', ()=>{
+    const idx = vehs.findIndex(x=>x.id===vehId);
+    vehs[idx].name = document.getElementById('ev-name').value.trim() || vehs[idx].name;
+    vehs[idx].tipo = tipo;
+    vehs[idx].km = parseInt(document.getElementById('ev-km').value,10) || vehs[idx].km;
+    vehs[idx].itvFecha = document.getElementById('ev-itv').value || null;
+    vehs[idx].seguroFecha = document.getElementById('ev-seguro').value || null;
+    Store.set(KEYS.VEH, vehs);
+    closeSheet(); openVehicleDetail(vehId);
+  });
+  document.getElementById('ev-delete').addEventListener('click', ()=>{
+    if(!confirm('¿Eliminar '+v.name+' y todo su historial? Esta acción no se puede deshacer.')) return;
+    Store.set(KEYS.VEH, vehs.filter(x=>x.id!==vehId));
+    Store.set(KEYS.LOGS, Store.get(KEYS.LOGS,[]).filter(l=>l.vehicleId!==vehId));
+    Store.set(KEYS.FUEL, Store.get(KEYS.FUEL,[]).filter(l=>l.vehicleId!==vehId));
+    closeSheet(); renderVehiculosList();
+  });
+  overlay.classList.add('show');
+}
+
+function openAlertsSheet(vehId){
+  const vehs = Store.get(KEYS.VEH,[]);
+  const v = vehs.find(x=>x.id===vehId);
+  const alerts = v.alerts || {};
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Alertas de ${v.name}</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 16px;line-height:1.4;">Pon cada cuántos kilómetros quieres que te avise desde el último registro de ese tipo. Déjalo vacío para desactivar.</p>
+    ${LOG_TYPES.map(l=>`
+      <div class="field">
+        <label>${l.ic} ${l.label} — avisar cada (km)</label>
+        <input type="number" inputmode="numeric" id="al-${l.k}" placeholder="Ej. 10000" value="${alerts[l.k]||''}">
+      </div>`).join('')}
+    <div class="actions"><button class="btn btn-primary" id="al-save">Guardar alertas</button></div>
+  `;
+  document.getElementById('al-save').addEventListener('click', ()=>{
+    const idx = vehs.findIndex(x=>x.id===vehId);
+    const newAlerts = {};
+    LOG_TYPES.forEach(l=>{
+      const val = parseInt(document.getElementById('al-'+l.k).value,10);
+      if(val>0) newAlerts[l.k] = val;
+    });
+    vehs[idx].alerts = newAlerts;
+    Store.set(KEYS.VEH, vehs);
+    closeSheet(); openVehicleDetail(vehId);
+  });
+  overlay.classList.add('show');
+}
+
+function openVehicleDetail(vehId){
+  document.getElementById('veh-list-wrap').style.display='none';
+  const wrap = document.getElementById('veh-detail-wrap');
+  wrap.style.display='block';
+  const v = Store.get(KEYS.VEH,[]).find(x=>x.id===vehId);
+  if(!v){ renderVehiculosList(); return; }
+  const logs = Store.get(KEYS.LOGS,[]).filter(l=>l.vehicleId===vehId).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const fuels = Store.get(KEYS.FUEL,[]).filter(f=>f.vehicleId===vehId).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const consumos = fuelChain(vehId);
+  const avg = avgConsumption(vehId);
+
+  wrap.innerHTML = `
+    <button class="back-btn" id="veh-back">‹ Vehículos</button>
+    <div class="hero veh">
+      <div class="eyebrow">${v.name} <span class="pencil" id="veh-edit" title="Editar vehículo">✏️</span> <span class="pencil" id="veh-alerts" title="Configurar alertas">🔔</span></div>
+      <div class="big num">${v.km.toLocaleString('es-ES')} <span style="font-size:16px;font-weight:600;color:rgba(255,255,255,0.6);">km</span></div>
+      ${avg ? `<div class="pill-center"><div class="pill">Consumo medio: ${avg.toFixed(1)} L/100km</div></div>` : ''}
+    </div>
+    ${getVehicleWarnings(v, Store.get(KEYS.LOGS,[])).map(w=>`<div class="card pad" style="background:var(--orange-soft);margin-bottom:10px;font-size:14px;">⚠️ ${w.mensaje}</div>`).join('')}
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="add-fuel">⛽ Repostaje</button>
+      <button class="btn btn-primary" id="add-log">🔧 Mantenimiento</button>
+    </div>
+
+    <div class="section-head"><h2>Gasto total (desde Finanzas)</h2></div>
+    <div class="card pad" id="veh-gasto-total"></div>
+
+    <div class="section-head"><h2>Repostajes</h2></div>
+    <div class="card" id="fuel-list">
+      ${fuels.length ? fuels.map(f=>`
+        <div class="row">
+          <div class="ico" style="background:var(--blue-soft);">⛽</div>
+          <div class="meta"><div class="t1">${f.litros} L</div>
+            <div class="t2">${fmtDate(f.date)} · ${f.km.toLocaleString('es-ES')} km${!f.lleno?' · depósito parcial':''}</div></div>
+          ${f.photo?`<img class="thumb" src="${f.photo}" data-src="${f.photo}">`:''}
+          <div class="side">${consumos[f.id] ? `<span class="badge">${consumos[f.id].toFixed(1)} L/100</span>` : ''}</div>
+        </div>`).join('') : `<div class="empty"><span class="icn">⛽</span><div class="t">Sin repostajes</div><div class="d">Añade uno para empezar a calcular el consumo</div></div>`}
+    </div>
+
+    <div class="section-head"><h2>Mantenimiento</h2></div>
+    <div class="card" id="veh-log-list">
+      ${logs.length ? logs.map(l=>{
+        const info = logInfo(l.tipo);
+        return `<div class="row">
+          <div class="ico" style="background:var(--green-soft);">${info.ic}</div>
+          <div class="meta"><div class="t1">${info.label}</div>
+            <div class="t2">${fmtDate(l.date)} · ${l.km.toLocaleString('es-ES')} km${l.notas? ' · '+l.notas:''}</div></div>
+          ${l.photo?`<img class="thumb" src="${l.photo}" data-src="${l.photo}">`:''}
+        </div>`;
+      }).join('') : `<div class="empty"><span class="icn">🔧</span><div class="t">Sin registros todavía</div></div>`}
+    </div>
+  `;
+  wrap.querySelectorAll('.thumb').forEach(img=>img.addEventListener('click', ()=>openLightbox(img.dataset.src)));
+  document.getElementById('veh-back').addEventListener('click', renderVehiculosList);
+  document.getElementById('veh-edit').addEventListener('click', ()=>openEditVehicleSheet(vehId));
+  document.getElementById('veh-alerts').addEventListener('click', ()=>openAlertsSheet(vehId));
+  document.getElementById('add-log').addEventListener('click', ()=>openLogSheet(vehId));
+  document.getElementById('add-fuel').addEventListener('click', ()=>openFuelSheet(vehId));
+  renderGastoVehiculo(vehId);
+}
+
+/* ============ SHEET ENGINE ============ */
+const overlay = document.getElementById('overlay');
+const sheetEl = document.getElementById('sheet');
+function closeSheet(){ overlay.classList.remove('show'); }
+overlay.addEventListener('click', e=>{ if(e.target===overlay) closeSheet(); });
+
+function photoFieldHTML(idPrefix){
+  return `<div class="field"><label>Foto de la factura (opcional)</label>
+    <div class="photo-input" id="${idPrefix}-wrap">
+      <label class="photo-btn" id="${idPrefix}-btn">📷 Añadir foto</label>
+      <input type="file" accept="image/*" id="${idPrefix}-file" style="display:none;">
+    </div></div>`;
+}
+function wirePhotoField(idPrefix, onChange){
+  let dataUrl = null;
+  const btn = document.getElementById(idPrefix+'-btn');
+  const file = document.getElementById(idPrefix+'-file');
+  btn.addEventListener('click', ()=>file.click());
+  file.addEventListener('change', ()=>{
+    if(!file.files[0]) return;
+    compressImage(file.files[0], url=>{
+      dataUrl = url;
+      document.getElementById(idPrefix+'-wrap').innerHTML =
+        `<img class="photo-preview" src="${url}"><label class="photo-btn" id="${idPrefix}-btn" style="flex:1;">📷 Cambiar foto</label><input type="file" accept="image/*" id="${idPrefix}-file" style="display:none;">`;
+      document.getElementById(idPrefix+'-btn').addEventListener('click', ()=>document.getElementById(idPrefix+'-file').click());
+      onChange(dataUrl);
+    });
+  });
+  return ()=>dataUrl;
+}
+
+function openTxSheet(presetType, presetAmount, presetNote, txId){
+  const existing = txId ? Store.get(KEYS.TX,[]).find(x=>x.id===txId) : null;
+  let type = existing ? existing.type : (presetType || 'expense');
+  let cat = existing ? existing.category : null;
+  let deducible = existing ? existing.deducible : false;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>${existing?'Editar movimiento':'Nuevo movimiento'}</h3>
+    <div class="field"><div class="seg" id="type-seg">
+      <button data-t="expense" class="${type==='expense'?'active':''}">Gasto</button>
+      <button data-t="income" class="${type==='income'?'active':''}">Ingreso</button>
+    </div></div>
+    <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="tx-amount" placeholder="0,00" value="${existing?existing.amount:(presetAmount!=null?presetAmount:'')}"></div>
+    <div class="field"><label>Categoría</label><div class="chips" id="tx-cats"></div></div>
+    <div class="field"><label>Nota (opcional)</label><input type="text" id="tx-note" placeholder="Ej. Cena con Marta" value="${existing?(existing.note||'').replace(/"/g,'&quot;'):(presetNote?presetNote.replace(/"/g,'&quot;'):'')}"></div>
+    <div class="check-row"><input type="checkbox" id="tx-recurrente" ${existing&&existing.recurrente?'checked':''}><label for="tx-recurrente">🔁 Es recurrente (se repite cada mes)</label></div>
+    ${type==='expense' ? `
+      <div class="check-row"><input type="checkbox" id="tx-deducible" ${deducible?'checked':''}><label for="tx-deducible">🧾 Deducible (autónomo)</label></div>
+      ${photoFieldHTML('tx-photo')}
+    ` : ''}
+    <div class="field"><label>Vehículo relacionado (opcional)</label>
+      <select id="tx-vehiculo">
+        <option value="">— Ninguno —</option>
+        ${Store.get(KEYS.VEH,[]).map(v=>`<option value="${v.id}" ${existing&&existing.vehiculoId===v.id?'selected':''}>${v.name}</option>`).join('')}
+      </select>
+    </div>
+    <div id="tx-subtipo-wrap"></div>
+    <div id="tx-subtipo-comida-wrap"></div>
+    <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
+    ${existing?`<div style="text-align:center;"><button class="btn-danger" id="tx-delete">Eliminar movimiento</button></div>`:''}
+  `;
+  let subtipoVehiculo = existing ? (existing.subtipoVehiculo||null) : null;
+  const SUBTIPOS_VEHICULO = [
+    {k:'combustible', label:'Combustible', ic:'⛽'},
+    {k:'mantenimiento', label:'Mantenimiento', ic:'🔧'},
+    {k:'otro', label:'Otro', ic:'📎'},
+  ];
+  function renderSubtipoVehiculo(){
+    const wrap = document.getElementById('tx-subtipo-wrap');
+    const vehSel = document.getElementById('tx-vehiculo').value;
+    if(type==='expense' && cat==='vehiculo' && vehSel){
+      if(!subtipoVehiculo) subtipoVehiculo = 'combustible';
+      wrap.innerHTML = `<div class="field"><label>Tipo de gasto</label><div class="chips" id="tx-subtipo-chips">
+        ${SUBTIPOS_VEHICULO.map(s=>`<button class="chip ${s.k===subtipoVehiculo?'active':''}" data-k="${s.k}">${s.ic} ${s.label}</button>`).join('')}
+      </div></div>`;
+      wrap.querySelectorAll('#tx-subtipo-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{ subtipoVehiculo=ch.dataset.k; renderSubtipoVehiculo(); }));
+    } else {
+      wrap.innerHTML = '';
+      subtipoVehiculo = null;
+    }
+  }
+  document.getElementById('tx-vehiculo').addEventListener('change', renderSubtipoVehiculo);
+  let subtipoComida = existing ? (existing.subtipoComida||null) : null;
+  const SUBTIPOS_COMIDA = [
+    {k:'supermercado', label:'Supermercado', ic:'🛒'},
+    {k:'antojo', label:'Antojo', ic:'🍫'},
+    {k:'suplementacion', label:'Suplementación', ic:'💊'},
+  ];
+  function renderSubtipoComida(){
+    const wrap = document.getElementById('tx-subtipo-comida-wrap');
+    if(type==='expense' && cat==='comida'){
+      if(!subtipoComida) subtipoComida = 'supermercado';
+      wrap.innerHTML = `<div class="field"><label>Tipo de comida</label><div class="chips" id="tx-subtipo-comida-chips">
+        ${SUBTIPOS_COMIDA.map(s=>`<button class="chip ${s.k===subtipoComida?'active':''}" data-k="${s.k}">${s.ic} ${s.label}</button>`).join('')}
+      </div></div>`;
+      wrap.querySelectorAll('#tx-subtipo-comida-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{ subtipoComida=ch.dataset.k; renderSubtipoComida(); }));
+    } else {
+      wrap.innerHTML = '';
+      subtipoComida = null;
+    }
+  }
+  function renderCats(){
+    const list = type==='expense'?catList('expense'):catList('income');
+    if(!cat || !list.find(c=>c.k===cat)) cat = list[0].k;
+    document.getElementById('tx-cats').innerHTML = list.map(c=>`<button class="chip ${c.k===cat?'active':''}" data-k="${c.k}">${c.ic} ${c.label}</button>`).join('');
+    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); renderSubtipoVehiculo(); renderSubtipoComida(); }));
+  }
+  renderCats();
+  renderSubtipoVehiculo();
+  renderSubtipoComida();
+  // Recoger foto
+  const getPhoto = () => {
+    const preview = document.querySelector('#tx-photo-wrap .photo-preview');
+    return preview ? preview.src : null;
+  };
+  document.querySelectorAll('#type-seg button').forEach(b=>b.addEventListener('click', ()=>{
+    type=b.dataset.t; document.querySelectorAll('#type-seg button').forEach(x=>x.classList.toggle('active',x===b));
+    // Mostrar/ocultar campos de deducible y foto según tipo
+    const dedWrap = document.querySelector('.check-row:has(#tx-deducible)')?.parentNode;
+    const fotoWrap = document.getElementById('tx-photo-wrap')?.closest('.field');
+    if(type==='expense'){
+      if(dedWrap) dedWrap.style.display = '';
+      if(fotoWrap) fotoWrap.style.display = '';
+    } else {
+      if(dedWrap) dedWrap.style.display = 'none';
+      if(fotoWrap) fotoWrap.style.display = 'none';
+    }
+    renderCats(); renderSubtipoVehiculo(); renderSubtipoComida();
+  }));
+  // Inicializar visibilidad
+  if(type!=='expense'){
+    const dedWrap = document.querySelector('.check-row:has(#tx-deducible)')?.parentNode;
+    const fotoWrap = document.getElementById('tx-photo-wrap')?.closest('.field');
+    if(dedWrap) dedWrap.style.display = 'none';
+    if(fotoWrap) fotoWrap.style.display = 'none';
+  }
+  document.getElementById('tx-save').addEventListener('click', ()=>{
+    const amt = parseFloat(document.getElementById('tx-amount').value);
+    if(!amt || amt<=0){ document.getElementById('tx-amount').focus(); return; }
+    const tx = Store.get(KEYS.TX,[]);
+    const note = document.getElementById('tx-note').value.trim();
+    const recurrente = document.getElementById('tx-recurrente').checked;
+    const vehiculoId = document.getElementById('tx-vehiculo').value || null;
+    const deducibleChecked = document.getElementById('tx-deducible')?.checked || false;
+    const photo = getPhoto();
+    // Si es gasto y deducible, crear/actualizar gasto en KEYS.GASTOS_AU
+    let gastoAuId = existing ? existing.gastoAuId : null;
+    if(type==='expense' && deducibleChecked){
+      const gastos = Store.get(KEYS.GASTOS_AU,[]);
+      if(gastoAuId){
+        const idx = gastos.findIndex(g=>g.id===gastoAuId);
+        if(idx>-1){
+          gastos[idx] = {...gastos[idx], descripcion:note || catInfo(cat).label, importe:amt, photo:photo || gastos[idx].photo};
+        }
+      } else {
+        const nuevoGasto = { id:uid(), date:todayISO(), descripcion:note || catInfo(cat).label, importe:amt, photo:photo || null };
+        gastos.push(nuevoGasto);
+        gastoAuId = nuevoGasto.id;
+      }
+      Store.set(KEYS.GASTOS_AU, gastos);
+    } else if(type==='expense' && !deducibleChecked && gastoAuId){
+      // Si se desmarcó deducible, eliminar el gasto asociado
+      Store.set(KEYS.GASTOS_AU, Store.get(KEYS.GASTOS_AU,[]).filter(g=>g.id!==gastoAuId));
+      gastoAuId = null;
+    }
+    if(existing){
+      const idx = tx.findIndex(x=>x.id===existing.id);
+      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, subtipoComida, deducible:deducibleChecked, gastoAuId, photo:photo || existing.photo};
+    } else {
+      tx.push({id:uid(), type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, subtipoComida, deducible:deducibleChecked, gastoAuId, photo:photo || null, date:todayISO()});
+    }
+    Store.set(KEYS.TX, tx);
+    closeSheet();
+    if(currentView==='inicio') renderInicio();
+    if(currentView==='finanzas') renderFinanzas();
+    renderHeader();
+  });
+  if(existing){
+    document.getElementById('tx-delete').addEventListener('click', ()=>{
+      if(!confirm('¿Eliminar este movimiento? No se puede deshacer.')) return;
+      // Si tenía gasto asociado, eliminarlo
+      if(existing.gastoAuId){
+        Store.set(KEYS.GASTOS_AU, Store.get(KEYS.GASTOS_AU,[]).filter(g=>g.id!==existing.gastoAuId));
+      }
+      Store.set(KEYS.TX, Store.get(KEYS.TX,[]).filter(x=>x.id!==existing.id));
+      closeSheet();
+      if(currentView==='inicio') renderInicio();
+      if(currentView==='finanzas') renderFinanzas();
+      renderHeader();
+    });
+  }
+  overlay.classList.add('show');
+  setTimeout(()=>document.getElementById('tx-amount').focus(), 300);
+}
+
+function openLogSheet(vehId){
+  const v = Store.get(KEYS.VEH,[]).find(x=>x.id===vehId);
+  let tipo='aceite';
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Mantenimiento — ${v.name}</h3>
+    <div class="field"><label>Tipo</label><div class="chips" id="log-types"></div></div>
+    <div class="field"><label>Kilometraje actual</label><input type="number" inputmode="numeric" id="log-km" value="${v.km||''}" placeholder="Ej. 24500"></div>
+    <div class="field"><label>Notas (opcional)</label><input type="text" id="log-notes" placeholder="Ej. Taller Can Pastilla"></div>
+    ${photoFieldHTML('log-photo')}
+    <div class="actions"><button class="btn btn-primary" id="log-save">Guardar</button></div>
+  `;
+  document.getElementById('log-types').innerHTML = LOG_TYPES.map(l=>`<button class="chip ${l.k===tipo?'active':''}" data-k="${l.k}">${l.ic} ${l.label}</button>`).join('');
+  document.querySelectorAll('#log-types .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+    tipo=ch.dataset.k; document.querySelectorAll('#log-types .chip').forEach(c=>c.classList.toggle('active',c===ch));
+  }));
+  const getPhoto = wirePhotoField('log-photo', ()=>{});
+  document.getElementById('log-save').addEventListener('click', ()=>{
+    const km = parseInt(document.getElementById('log-km').value,10);
+    if(!km || km<=0){ document.getElementById('log-km').focus(); return; }
+    const logs = Store.get(KEYS.LOGS,[]);
+    logs.push({id:uid(), vehicleId:vehId, tipo, km, notas:document.getElementById('log-notes').value.trim(), date:todayISO(), photo:getPhoto()});
+    Store.set(KEYS.LOGS, logs);
+    const vehs = Store.get(KEYS.VEH,[]);
+    const idx = vehs.findIndex(x=>x.id===vehId);
+    if(km > vehs[idx].km) vehs[idx].km = km;
+    Store.set(KEYS.VEH, vehs);
+    closeSheet(); openVehicleDetail(vehId);
+  });
+  overlay.classList.add('show');
+}
+
+function openFuelSheet(vehId){
+  const v = Store.get(KEYS.VEH,[]).find(x=>x.id===vehId);
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Repostaje — ${v.name}</h3>
+    <div class="field"><label>Kilometraje actual</label><input type="number" inputmode="numeric" id="fu-km" value="${v.km||''}" placeholder="Ej. 24700"></div>
+    <div class="field"><label>Litros</label><input type="number" inputmode="decimal" id="fu-litros" placeholder="Ej. 38,5"></div>
+    <div class="check-row"><input type="checkbox" id="fu-lleno" checked><label for="fu-lleno">Depósito lleno</label></div>
+    <p style="font-size:12px;color:var(--text-dim);margin:4px 0 0;">Marca esto solo si has llenado el depósito del todo — así calculamos el consumo real entre repostajes.</p>
+    ${photoFieldHTML('fu-photo')}
+    <div class="actions"><button class="btn btn-primary" id="fu-save">Guardar</button></div>
+  `;
+  const getPhoto = wirePhotoField('fu-photo', ()=>{});
+  document.getElementById('fu-save').addEventListener('click', ()=>{
+    const km = parseInt(document.getElementById('fu-km').value,10);
+    const litros = parseFloat(document.getElementById('fu-litros').value);
+    if(!km || km<=0){ document.getElementById('fu-km').focus(); return; }
+    if(!litros || litros<=0){ document.getElementById('fu-litros').focus(); return; }
+    const fuels = Store.get(KEYS.FUEL,[]);
+    fuels.push({id:uid(), vehicleId:vehId, km, litros, lleno:document.getElementById('fu-lleno').checked, date:todayISO(), photo:getPhoto()});
+    Store.set(KEYS.FUEL, fuels);
+    const vehs = Store.get(KEYS.VEH,[]);
+    const idx = vehs.findIndex(x=>x.id===vehId);
+    if(km > vehs[idx].km) vehs[idx].km = km;
+    Store.set(KEYS.VEH, vehs);
+    closeSheet(); openVehicleDetail(vehId);
+  });
+  overlay.classList.add('show');
+}
+
+function openVehiclePicker(){
+  const vehs = Store.get(KEYS.VEH,[]);
+  sheetEl.innerHTML = `<div class="handle"></div><h3>¿Qué vehículo?</h3>` +
+    vehs.map(v=>`<button class="btn btn-outline" style="margin-bottom:8px;justify-content:flex-start;" data-id="${v.id}">${vehIcon(v.tipo)} &nbsp;${v.name}</button>`).join('');
+  overlay.classList.add('show');
+  sheetEl.querySelectorAll('button[data-id]').forEach(b=>{
+    b.addEventListener('click', ()=>{ closeSheet(); setTimeout(()=>openVehicleDetail(b.dataset.id),150); });
+  });
+}
+
+/* FAB behaviour */
+document.getElementById('fab').addEventListener('click', ()=>{
+  if(currentView==='inicio' || currentView==='finanzas'){ openTxSheet('expense'); }
+  else if(currentView==='vehiculos'){
+    const detailVisible = document.getElementById('veh-detail-wrap').style.display!=='none';
+    if(!detailVisible) openVehiclePicker();
+  }
+  else if(currentView==='autonomo'){ openIngresoSheet(); }
+});
+
+/* ============ SETTINGS ============ */
+function openAjustesSheet(){
+  const theme = Store.get(KEYS.THEME,'light');
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Ajustes</h3>
+    <div class="field"><label>Apariencia</label>
+      <div class="seg" id="theme-seg">
+        <button data-t="light" class="${theme==='light'?'active':''}">☀️ Modo día</button>
+        <button data-t="dark" class="${theme==='dark'?'active':''}">🌙 Modo oscuro</button>
+      </div>
+    </div>
+    <div class="field"><label>Categorías de gasto (Finanzas)</label>
+      <div id="set-cats-list-expense"></div>
+      <button class="btn btn-outline" id="set-cat-add-expense" style="margin-top:8px;">＋ Añadir categoría</button>
+    </div>
+    <div class="field"><label>Categorías de ingreso (Finanzas)</label>
+      <div id="set-cats-list-income"></div>
+      <button class="btn btn-outline" id="set-cat-add-income" style="margin-top:8px;">＋ Añadir categoría</button>
+    </div>
+    <div class="field"><label>Orden del menú de Finanzas</label>
+      <div id="set-fin-orden-list"></div>
+    </div>
+    <div class="field"><label>Servidor (datos + facturación)</label>
+      <input type="text" id="set-server-url" placeholder="https://tu-servidor.onrender.com" value="${Store.get(KEYS.SERVER_URL,'')}">
+      <input type="text" id="set-server-key" placeholder="Clave APP_API_KEY" value="${Store.get(KEYS.SERVER_KEY,'')}" style="margin-top:8px;">
+      <button class="btn btn-outline" id="set-server-save" style="margin-top:8px;">Guardar conexión</button>
+      <p style="font-size:12px;color:var(--text-dim);margin:8px 0 0;">Si lo configuras, toda la app (Finanzas, Vehículos, Autónomo) se sincroniza con este servidor — así da igual si la abres desde el icono o desde Safari, verás siempre los mismos datos. Déjalo vacío para seguir 100% local como hasta ahora.</p>
+    </div>
+    <div class="field"><label>Actualizaciones</label>
+      <p style="font-size:13px;color:var(--text-dim);margin:0 0 8px;">Versión instalada: <b style="color:var(--ink);">${APP_VERSION}</b></p>
+      <button class="btn btn-outline" id="check-updates">🔄 Comprobar actualizaciones</button>
+    </div>
+    <div class="field"><label>Copia de seguridad</label>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="backup-export">⬇️ Exportar copia</button>
+        <label class="btn btn-outline" id="backup-import-btn" for="backup-import-file" style="cursor:pointer;">⬆️ Restaurar copia</label>
+      </div>
+      <input type="file" accept="application/json" id="backup-import-file" style="display:none;">
+      <p style="font-size:12px;color:var(--text-dim);margin:8px 0 0;">Descarga un fichero con todos tus datos (finanzas, vehículos, autónomo) para guardarlo donde quieras. Restaurar sobrescribe lo que tengas ahora en la app.</p>
+    </div>
+    <p style="font-size:13px;color:var(--text-dim);line-height:1.5;margin-top:18px;">Todos tus datos se guardan solo en este iPhone (no hay servidor ni nube). Si borras la app o los datos del navegador, se pierden — por eso conviene hacer copias de seguridad de vez en cuando.</p>
+    <div class="actions"><button class="btn btn-outline" id="reset-data" style="color:var(--orange);">Vaciar todos los datos</button></div>
+  `;
+  document.querySelectorAll('#theme-seg button').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      applyTheme(b.dataset.t);
+      document.querySelectorAll('#theme-seg button').forEach(x=>x.classList.toggle('active', x===b));
+    });
+  });
+  renderCatsSettings('expense');
+  renderCatsSettings('income');
+  renderFinOrdenSettings();
+  document.getElementById('set-cat-add-expense').addEventListener('click', ()=>openAddCategoriaSheet('expense'));
+  document.getElementById('set-cat-add-income').addEventListener('click', ()=>openAddCategoriaSheet('income'));
+  document.getElementById('set-server-save').addEventListener('click', ()=>{
+    Store.set(KEYS.SERVER_URL, document.getElementById('set-server-url').value.trim());
+    Store.set(KEYS.SERVER_KEY, document.getElementById('set-server-key').value.trim());
+    alert('Conexión guardada. La app se va a recargar para sincronizar.');
+    location.reload();
+  });
+  document.getElementById('check-updates').addEventListener('click', ()=>comprobarActualizacion(false));
+  document.getElementById('backup-export').addEventListener('click', exportarCopiaSeguridad);
+  document.getElementById('backup-import-file').addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    if(!confirm('Esto sustituirá todos los datos actuales de la app por los de la copia. ¿Continuar?')) { e.target.value=''; return; }
+    const reader = new FileReader();
+    reader.onload = ev=>{
+      try{
+        const data = JSON.parse(ev.target.result);
+        Object.keys(data).forEach(k=> localStorage.setItem(k, data[k]));
+        closeSheet();
+        showView('inicio');
+        alert('Copia restaurada correctamente.');
+      }catch(err){
+        alert('Ese fichero no parece una copia de seguridad válida.');
+      }
+    };
+    reader.readAsText(file);
+  });
+  document.getElementById('reset-data').addEventListener('click', ()=>{
+    if(!confirm('Esto borrará todos tus movimientos, vehículos y registros. ¿Seguro?')) return;
+    localStorage.clear(); closeSheet(); seedIfEmpty(); showView('inicio');
+  });
+  overlay.classList.add('show');
+}
+document.getElementById('settings-btn').addEventListener('click', openAjustesSheet);
+
+function renderFinOrdenSettings(){
+  const el = document.getElementById('set-fin-orden-list');
+  if(!el) return;
+  const orden = finMenuOrdenCompleto();
+  const items = orden.map(t=>FIN_MENU_META.find(m=>m.tipo===t));
+  el.innerHTML = items.map((it,i)=>`
+    <div class="row" style="padding:8px 0;">
+      <div class="ico" style="background:var(--blue-soft);width:32px;height:32px;font-size:15px;">${it.ic}</div>
+      <div class="meta"><div class="t1" style="font-size:14px;">${it.titulo}</div></div>
+      <button class="reorder-btn" data-fin-mover="${it.tipo}" data-dir="up" ${i===0?'disabled':''} style="font-size:16px;padding:4px 8px;">▲</button>
+      <button class="reorder-btn" data-fin-mover="${it.tipo}" data-dir="down" ${i===items.length-1?'disabled':''} style="font-size:16px;padding:4px 8px;">▼</button>
+    </div>`).join('');
+  el.querySelectorAll('[data-fin-mover]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const orden = finMenuOrdenCompleto();
+    const idx = orden.indexOf(btn.dataset.finMover);
+    const destino = btn.dataset.dir==='up' ? idx-1 : idx+1;
+    if(destino<0 || destino>=orden.length) return;
+    [orden[idx], orden[destino]] = [orden[destino], orden[idx]];
+    Store.set(KEYS.FIN_MENU_ORDEN, orden);
+    renderFinOrdenSettings();
+  }));
+}
+function renderCatsSettings(tipo){
+  const {base, custom: customKey, hidden: hiddenKey} = catKeys(tipo);
+  const ocultas = Store.get(hiddenKey,[]);
+  const overrides = Store.get(KEYS.CAT_OVERRIDES,{});
+  const conOverride = c => overrides[c.k] ? {...c, ...overrides[c.k]} : c;
+  const fijas = base.filter(c=>!ocultas.includes(c.k)).map(conOverride);
+  const custom = Store.get(customKey,[]).map(conOverride);
+  const el = document.getElementById(tipo==='income'?'set-cats-list-income':'set-cats-list-expense');
+  if(!el) return;
+  const fila = (c, esFija) => `
+    <div class="row" style="padding:8px 0;">
+      <div class="ico" style="background:${c.color};width:32px;height:32px;font-size:15px;">${c.ic}</div>
+      <div class="meta"><div class="t1" style="font-size:14px;">${c.label}${esFija?' <span style="color:var(--text-dim);font-size:11px;">(por defecto)</span>':''}</div></div>
+      <button class="pencil" data-edit="${c.k}" data-fija="${esFija?1:0}" style="font-size:15px;">✏️</button>
+      <button class="btn-danger" data-del="${c.k}" style="font-size:13px;">Eliminar</button>
+    </div>`;
+  el.innerHTML = fijas.map(c=>fila(c,true)).join('') + custom.map(c=>fila(c,false)).join('');
+  if(ocultas.length){
+    el.innerHTML += `<button class="btn btn-outline" data-restaurar-tipo="${tipo}" style="margin-top:8px;font-size:13px;">↺ Restaurar categorías por defecto eliminadas</button>`;
+  }
+  el.querySelectorAll('[data-edit]').forEach(btn=>btn.addEventListener('click', ()=>{
+    openEditCategoriaSheet(tipo, btn.dataset.edit, btn.dataset.fija==='1');
+  }));
+  el.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const k = btn.dataset.del;
+    if(base.some(c=>c.k===k)){
+      const oc = Store.get(hiddenKey,[]);
+      if(!oc.includes(k)) oc.push(k);
+      Store.set(hiddenKey, oc);
+    } else {
+      Store.set(customKey, Store.get(customKey,[]).filter(c=>c.k!==k));
+    }
+    renderCatsSettings(tipo);
+  }));
+  const btnRestaurar = el.querySelector('[data-restaurar-tipo]');
+  if(btnRestaurar) btnRestaurar.addEventListener('click', ()=>{
+    Store.set(hiddenKey, []);
+    renderCatsSettings(tipo);
+  });
+}
+
+function openAddCategoriaSheet(tipo){
+  let color = CAT_COLORES[0].v;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Nueva categoría de ${tipo==='income'?'ingreso':'gasto'}</h3>
+    <div class="field"><label>Emoji</label><input type="text" id="cat-emoji" placeholder="📎" maxlength="4" value="📎"></div>
+    <div class="field"><label>Nombre</label><input type="text" id="cat-nombre" placeholder="Ej. Mascotas"></div>
+    <div class="field"><label>Color</label><div class="chips" id="cat-colores">${CAT_COLORES.map(c=>`<button class="chip" data-v="${c.v}" style="background:${c.v};border-color:transparent;">${c.nombre}</button>`).join('')}</div></div>
+    <div class="actions"><button class="btn btn-primary" id="cat-save">Añadir</button></div>
+  `;
+  document.querySelectorAll('#cat-colores .chip').forEach((ch,i)=>{
+    if(i===0) ch.classList.add('active');
+    ch.addEventListener('click', ()=>{ color = ch.dataset.v; document.querySelectorAll('#cat-colores .chip').forEach(c=>c.classList.toggle('active', c===ch)); });
+  });
+  document.getElementById('cat-save').addEventListener('click', ()=>{
+    const nombre = document.getElementById('cat-nombre').value.trim();
+    if(!nombre){ document.getElementById('cat-nombre').focus(); return; }
+    const emoji = document.getElementById('cat-emoji').value.trim() || '📎';
+    const k = 'custom_'+nombre.toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi,'_')+'_'+uid();
+    const {custom: customKey} = catKeys(tipo);
+    const custom = Store.get(customKey,[]);
+    custom.push({k, label:nombre, ic:emoji, color});
+    Store.set(customKey, custom);
+    openAjustesSheet();
+  });
+  overlay.classList.add('show');
+}
+
+function openEditCategoriaSheet(tipo, key, esFija){
+  const actual = catList(tipo).find(c=>c.k===key);
+  if(!actual) return;
+  let color = actual.color;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Editar categoría</h3>
+    <div class="field"><label>Emoji</label><input type="text" id="cat-emoji" maxlength="4" value="${actual.ic}"></div>
+    <div class="field"><label>Nombre</label><input type="text" id="cat-nombre" value="${actual.label}"></div>
+    <div class="field"><label>Color</label><div class="chips" id="cat-colores">${CAT_COLORES.map(c=>`<button class="chip ${c.v===color?'active':''}" data-v="${c.v}" style="background:${c.v};border-color:transparent;">${c.nombre}</button>`).join('')}</div></div>
+    <div class="actions"><button class="btn btn-primary" id="cat-save">Guardar cambios</button></div>
+  `;
+  document.querySelectorAll('#cat-colores .chip').forEach(ch=>{
+    ch.addEventListener('click', ()=>{ color = ch.dataset.v; document.querySelectorAll('#cat-colores .chip').forEach(c=>c.classList.toggle('active', c===ch)); });
+  });
+  document.getElementById('cat-save').addEventListener('click', ()=>{
+    const nombre = document.getElementById('cat-nombre').value.trim();
+    if(!nombre){ document.getElementById('cat-nombre').focus(); return; }
+    const emoji = document.getElementById('cat-emoji').value.trim() || actual.ic;
+    if(esFija){
+      const overrides = Store.get(KEYS.CAT_OVERRIDES,{});
+      overrides[key] = {label:nombre, ic:emoji, color};
+      Store.set(KEYS.CAT_OVERRIDES, overrides);
+    } else {
+      const {custom: customKey} = catKeys(tipo);
+      const custom = Store.get(customKey,[]);
+      const idx = custom.findIndex(c=>c.k===key);
+      if(idx>-1){ custom[idx] = {...custom[idx], label:nombre, ic:emoji, color}; Store.set(customKey, custom); }
+    }
+    openAjustesSheet();
+  });
+  overlay.classList.add('show');
+}
+
+function exportarCopiaSeguridad(){
+  const data = {};
+  for(let i=0;i<localStorage.length;i++){
+    const k = localStorage.key(i);
+    if(k && k.startsWith('bitacora_')) data[k] = localStorage.getItem(k);
+  }
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bitacora-backup-${todayISO()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+
+/* ============ DEEP LINK (Atajos) ============ */
+(function handleDeepLink(){
+  const params = new URLSearchParams(window.location.search);
+  const q = params.get('quick');
+  const importe = params.get('importe');
+  const comercio = params.get('comercio');
+  const amt = importe ? parseFloat(importe.replace(',','.')) : null;
+  if(q==='gasto'){ showView('finanzas'); setTimeout(()=>openTxSheet('expense', amt, comercio), 200); }
+  else if(q==='ingreso'){ showView('finanzas'); setTimeout(()=>openTxSheet('income', amt, comercio), 200); }
+})();
+
+/* ============ MODO PRIVACIDAD (difuminar importes) ============ */
+const ICON_OJO_ABIERTO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_OJO_CERRADO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 4.22-5.19M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>`;
+document.getElementById('privacy-toggle').addEventListener('click', ()=>{
+  const activo = document.body.classList.toggle('privacidad');
+  document.getElementById('privacy-toggle').innerHTML = activo ? ICON_OJO_CERRADO : ICON_OJO_ABIERTO;
+});
+
+/* ============ PANEL FLOTANTE: ocultar al bajar, mostrar al llegar arriba ============ */
+(function(){
+  const tabbar = document.querySelector('.tabbar');
+  let lastY = window.scrollY;
+  let ticking = false;
+  window.addEventListener('scroll', ()=>{
+    if(ticking) return;
+    ticking = true;
+    requestAnimationFrame(()=>{
+      const y = window.scrollY;
+      if(y <= 8){
+        tabbar.classList.remove('oculta');
+      } else if(y - lastY > 4){
+        tabbar.classList.add('oculta');
+      }
+      lastY = y;
+      ticking = false;
+    });
+  }, {passive:true});
+})();
+
+/* ============ COMPROBAR ACTUALIZACIONES ============ */
+function comprobarActualizacion(silencioso){
+  fetch(location.pathname + '?_check=' + Date.now(), {cache:'no-store'})
+    .then(r=>r.text())
+    .then(html=>{
+      const m = html.match(/const APP_VERSION\s*=\s*'([^']+)'/);
+      if(m && m[1] && m[1] !== APP_VERSION){
+        mostrarBannerActualizacion(m[1]);
+        if(!silencioso) alert('Hay una versión nueva disponible: '+m[1]+' (tienes '+APP_VERSION+').');
+      } else if(!silencioso){
+        alert('Ya tienes la versión más reciente ('+APP_VERSION+').');
+      }
+    })
+    .catch(()=>{ if(!silencioso) alert('No se ha podido comprobar — revisa tu conexión.'); });
+}
+function mostrarBannerActualizacion(nuevaVersion){
+  if(document.getElementById('update-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'update-banner';
+  b.className = 'update-banner';
+  b.innerHTML = `🔄 Nueva versión disponible — <span style="text-decoration:underline;">toca para actualizar</span>`;
+  b.addEventListener('click', ()=>{ location.href = location.pathname + '?_upd=' + Date.now(); });
+  document.body.appendChild(b);
+}
+
+/* ============ INIT ============ */
+(async function iniciar(){
+  const {url} = serverConfig();
+  let overlay;
+  if(url){
+    overlay = document.createElement('div');
+    overlay.id = 'boot-overlay';
+    overlay.innerHTML = '<div class="boot-spinner"></div><div>Sincronizando…</div>';
+    document.body.appendChild(overlay);
+  }
+  await hydrateStoreFromServer();
+  seedIfEmpty();
+  if(overlay) overlay.remove();
+  applyTheme(Store.get(KEYS.THEME,'light'));
+  showView('inicio');
+  setTimeout(()=>comprobarActualizacion(true), 1500);
+})();
+</script>
+</body>
+</html>

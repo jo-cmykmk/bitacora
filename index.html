@@ -377,7 +377,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.16';
+const APP_VERSION = '2026-08-01.20';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -386,7 +386,8 @@ const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs',
   SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom',
   CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden', CAT_INCOME_CUSTOM:'bitacora_cat_income_custom',
   CAT_INCOME_HIDDEN:'bitacora_cat_income_hidden', CAT_OVERRIDES:'bitacora_cat_overrides', CARTERA:'bitacora_cartera',
-  FIN_MENU_ORDEN:'bitacora_fin_menu_orden' };
+  FIN_MENU_ORDEN:'bitacora_fin_menu_orden', CARTERA_OBJETIVOS:'bitacora_cartera_objetivos',
+  AUTONOMO_COSTES_FIJOS:'bitacora_autonomo_costes_fijos', AUTONOMO_RESERVA_PCT:'bitacora_autonomo_reserva_pct' };
 
 // Estas claves son ajustes de ESTE dispositivo (a qué servidor hablar) — nunca se sincronizan.
 const LOCAL_ONLY_KEYS = new Set([KEYS.SERVER_URL, KEYS.SERVER_KEY]);
@@ -511,6 +512,9 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CAT_OVERRIDES,null)===null) Store.set(KEYS.CAT_OVERRIDES,{});
   if(Store.get(KEYS.CARTERA,null)===null) Store.set(KEYS.CARTERA, CARTERA_ELEMENTOS_INICIALES.map(e=>({...e, importe:0})));
   if(Store.get(KEYS.FIN_MENU_ORDEN,null)===null) Store.set(KEYS.FIN_MENU_ORDEN, ['evolucion','cartera','ahorro','recurrentes','recomendaciones','categoria','movimientos']);
+  if(Store.get(KEYS.CARTERA_OBJETIVOS,null)===null) Store.set(KEYS.CARTERA_OBJETIVOS, Object.fromEntries(CARTERA_GRUPOS.map(g=>[g.k,g.objetivo])));
+  if(Store.get(KEYS.AUTONOMO_COSTES_FIJOS,null)===null) Store.set(KEYS.AUTONOMO_COSTES_FIJOS, [{id:uid(), nombre:'Cuota de autónomo + alquiler espacio', importe:370}]);
+  if(Store.get(KEYS.AUTONOMO_RESERVA_PCT,null)===null) Store.set(KEYS.AUTONOMO_RESERVA_PCT, 20);
 }
 
 /* ============ CATEGORIES ============ */
@@ -524,21 +528,30 @@ const CAT_EXPENSE = [
   {k:'inversion', label:'Inversión', ic:'📈', color:'var(--blue-soft)'},
   {k:'otros', label:'Otros', ic:'📎', color:'var(--yellow-soft)'},
 ];
+const SUBTIPO_LABELS = {
+  combustible:'Combustible', mantenimiento:'Mantenimiento', otro:'Otro',
+  supermercado:'Supermercado', antojo:'Antojo', suplementacion:'Suplementación',
+};
+const CARTERA_GRUPOS = [
+  {k:'global', nombre:'Renta variable global', objetivo:55},
+  {k:'emergentes', nombre:'Renta variable emergentes', objetivo:26},
+  {k:'acciones', nombre:'Acciones individuales', objetivo:19},
+];
 const CARTERA_ELEMENTOS_INICIALES = [
-  {id:'rv_global', nombre:'Renta variable global', tipo:'Fondo indexado', detalle:'MSCI World · IE000ZYRH0Q7', ic:'🌍'},
-  {id:'rv_emergentes', nombre:'Renta variable emergentes', tipo:'Fondo indexado', detalle:'MSCI Emerging Markets · IE000QAZP7L2', ic:'🌏'},
-  {id:'MSFT', nombre:'Microsoft', tipo:'Tecnología', detalle:'MSFT', ic:'💻'},
-  {id:'NVDA', nombre:'Nvidia', tipo:'Tecnología', detalle:'NVDA', ic:'💻'},
-  {id:'CEG', nombre:'Constellation Energy', tipo:'Energía', detalle:'CEG', ic:'⚡'},
-  {id:'NEE', nombre:'NextEra Energy', tipo:'Energía', detalle:'NEE', ic:'⚡'},
-  {id:'OKLO', nombre:'Oklo', tipo:'Energía', detalle:'OKLO', ic:'⚡'},
-  {id:'NNE', nombre:'Nano Nuclear Energy', tipo:'Energía', detalle:'NNE', ic:'⚡'},
-  {id:'SPCX', nombre:'SpaceX', tipo:'Espacio', detalle:'SPCX', ic:'🚀'},
-  {id:'RKLB', nombre:'Rocket Lab', tipo:'Espacio', detalle:'RKLB', ic:'🚀'},
-  {id:'JPM', nombre:'JPMorgan Chase', tipo:'Financiero', detalle:'JPM', ic:'🏦'},
-  {id:'LLY', nombre:'Eli Lilly', tipo:'Salud', detalle:'LLY', ic:'💊'},
-  {id:'FCX', nombre:'Freeport-McMoRan', tipo:'Materiales', detalle:'FCX', ic:'⛏️'},
-  {id:'RTX', nombre:'RTX Corporation', tipo:'Industrial / Defensa', detalle:'RTX', ic:'🛡️'},
+  {id:'rv_global', grupo:'global', nombre:'Renta variable global', tipo:'Fondo indexado', detalle:'MSCI World · IE000ZYRH0Q7', ic:'🌍'},
+  {id:'rv_emergentes', grupo:'emergentes', nombre:'Renta variable emergentes', tipo:'Fondo indexado', detalle:'MSCI Emerging Markets · IE000QAZP7L2', ic:'🌏'},
+  {id:'MSFT', grupo:'acciones', nombre:'Microsoft', tipo:'Tecnología', detalle:'MSFT', ic:'💻'},
+  {id:'NVDA', grupo:'acciones', nombre:'Nvidia', tipo:'Tecnología', detalle:'NVDA', ic:'💻'},
+  {id:'CEG', grupo:'acciones', nombre:'Constellation Energy', tipo:'Energía', detalle:'CEG', ic:'⚡'},
+  {id:'NEE', grupo:'acciones', nombre:'NextEra Energy', tipo:'Energía', detalle:'NEE', ic:'⚡'},
+  {id:'OKLO', grupo:'acciones', nombre:'Oklo', tipo:'Energía', detalle:'OKLO', ic:'⚡'},
+  {id:'NNE', grupo:'acciones', nombre:'Nano Nuclear Energy', tipo:'Energía', detalle:'NNE', ic:'⚡'},
+  {id:'SPCX', grupo:'acciones', nombre:'SpaceX', tipo:'Espacio', detalle:'SPCX', ic:'🚀'},
+  {id:'RKLB', grupo:'acciones', nombre:'Rocket Lab', tipo:'Espacio', detalle:'RKLB', ic:'🚀'},
+  {id:'JPM', grupo:'acciones', nombre:'JPMorgan Chase', tipo:'Financiero', detalle:'JPM', ic:'🏦'},
+  {id:'LLY', grupo:'acciones', nombre:'Eli Lilly', tipo:'Salud', detalle:'LLY', ic:'💊'},
+  {id:'FCX', grupo:'acciones', nombre:'Freeport-McMoRan', tipo:'Materiales', detalle:'FCX', ic:'⛏️'},
+  {id:'RTX', grupo:'acciones', nombre:'RTX Corporation', tipo:'Industrial / Defensa', detalle:'RTX', ic:'🛡️'},
 ];
 const CAT_INCOME = [
   {k:'nomina', label:'Nómina', ic:'💼', color:'var(--green-soft)'},
@@ -766,6 +779,9 @@ function trimestreActual(){
   const inicio = new Date(now.getFullYear(), (t-1)*3, 1);
   return {t, year:now.getFullYear(), inicio};
 }
+function autonomoCostesFijosTotal(){
+  return Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]).reduce((s,c)=>s+(c.importe||0),0);
+}
 function resumenTrimestre(){
   const {t, year, inicio} = trimestreActual();
   const ingresos = Store.get(KEYS.INGRESOS_AU,[]).filter(i=> new Date(i.date) >= inicio);
@@ -774,22 +790,119 @@ function resumenTrimestre(){
   const neto = ingresos.reduce((s,i)=>s+ingresoNeto(i),0);
   const pendienteFacturar = ingresos.filter(i=>i.tipo==='facturar' && !i.facturado).length;
   const gastosTrim = Store.get(KEYS.GASTOS_AU,[]).filter(g=> new Date(g.date) >= inicio).reduce((s,g)=>s+g.importe,0);
-  return {label:`${t}T ${year}`, bruto, companera, neto, pendienteFacturar, count:ingresos.length, gastosTrim};
+  const costesFijosTrim = autonomoCostesFijosTotal()*3;
+  const beneficioNeto = neto - gastosTrim - costesFijosTrim;
+  const pctReserva = Store.get(KEYS.AUTONOMO_RESERVA_PCT, 20);
+  const reservaFiscal = Math.max(0, beneficioNeto) * (pctReserva/100);
+  return {label:`${t}T ${year}`, bruto, companera, neto, pendienteFacturar, count:ingresos.length, gastosTrim, costesFijosTrim, beneficioNeto, pctReserva, reservaFiscal};
+}
+function autonomoBalanceMes(offset){
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()+(offset||0));
+  const mk = monthKeyOf(d);
+  const ingresos = Store.get(KEYS.INGRESOS_AU,[]).filter(i=>monthKeyOf(i.date)===mk);
+  const ingresosNetos = ingresos.reduce((s,i)=>s+ingresoNeto(i),0);
+  const gastos = Store.get(KEYS.GASTOS_AU,[]).filter(g=>monthKeyOf(g.date)===mk).reduce((s,g)=>s+g.importe,0);
+  const costesFijos = autonomoCostesFijosTotal();
+  return {mk, ingresosNetos, gastos, costesFijos, balance: -costesFijos + ingresosNetos - gastos};
 }
 
+function renderAutonomoBalanceMensual(){
+  const el = document.getElementById('au-balance-mensual');
+  if(!el) return;
+  const m = autonomoBalanceMes(0);
+  const costes = Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]);
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
+      <div class="num" style="font-size:26px;color:${m.balance<0?'var(--orange)':'var(--green-deep)'};">${fmtEUR(m.balance)}</div>
+      <div class="badge ${m.balance<0?'warn':''}">${monthLabel(0)}</div>
+    </div>
+    <div class="bd-row"><div class="name">🔻 Costes fijos</div><div class="track"></div><div class="amt num">−${fmtEUR(m.costesFijos)}</div></div>
+    <div class="bd-row"><div class="name">💼 Ingresos netos</div><div class="track"></div><div class="amt num">+${fmtEUR(m.ingresosNetos)}</div></div>
+    <div class="bd-row"><div class="name">🧾 Gastos deducibles</div><div class="track"></div><div class="amt num">−${fmtEUR(m.gastos)}</div></div>
+    <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">Cada mes arranca en −${fmtEUR(m.costesFijos)} (${costes.map(c=>c.nombre).join(', ')||'sin costes fijos definidos'}) antes de contar nada más.</p>
+  `;
+}
+function openEditarReservaFiscal(){
+  const pct = Store.get(KEYS.AUTONOMO_RESERVA_PCT, 20);
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Reserva fiscal</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">Porcentaje estimado del beneficio neto trimestral a reservar para el Modelo 130. Tu gestora puede darte un número más ajustado.</p>
+    <div class="field"><label>Porcentaje</label><input type="number" inputmode="decimal" class="amount" id="rf-pct" value="${pct}"></div>
+    <div class="actions"><button class="btn btn-primary" id="rf-save">Guardar</button></div>
+  `;
+  document.getElementById('rf-save').addEventListener('click', ()=>{
+    const nuevo = parseFloat(document.getElementById('rf-pct').value);
+    if(isNaN(nuevo) || nuevo<0){ document.getElementById('rf-pct').focus(); return; }
+    Store.set(KEYS.AUTONOMO_RESERVA_PCT, nuevo);
+    closeSheet();
+    renderAutonomo();
+  });
+  overlay.classList.add('show');
+}
+function openEditarCostesFijos(){
+  const costes = Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]);
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Costes fijos mensuales</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">Lo que te cuesta ser autónomo cada mes, pase lo que pase (cuota, alquiler de espacio, gestoría fija...). Se resta automáticamente cada mes.</p>
+    <div id="cf-lista"></div>
+    <button class="btn btn-outline" id="cf-add" style="margin:10px 0;">＋ Añadir coste fijo</button>
+    <div class="card pad" style="margin-bottom:10px;"><b>Total: ${fmtEUR(costes.reduce((s,c)=>s+c.importe,0))} / mes</b></div>
+  `;
+  function pintar(){
+    const costes = Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]);
+    document.getElementById('cf-lista').innerHTML = costes.map(c=>`
+      <div class="row" style="padding:8px 0;">
+        <div class="meta"><div class="t1" style="font-size:14px;">${c.nombre}</div></div>
+        <div class="amt num" style="margin-right:8px;">${fmtEUR(c.importe)}</div>
+        <button class="btn-danger" data-del="${c.id}" style="font-size:13px;">Eliminar</button>
+      </div>`).join('') || `<p style="font-size:13px;color:var(--text-dim);">Sin costes fijos — el mes arrancará en 0€.</p>`;
+    document.querySelectorAll('[data-del]').forEach(btn=>btn.addEventListener('click', ()=>{
+      Store.set(KEYS.AUTONOMO_COSTES_FIJOS, Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]).filter(c=>c.id!==btn.dataset.del));
+      pintar();
+      renderAutonomo();
+    }));
+  }
+  pintar();
+  document.getElementById('cf-add').addEventListener('click', ()=>{
+    const nombre = prompt('Nombre del coste (ej. Cuota de autónomo):');
+    if(!nombre) return;
+    const importe = parseFloat(prompt('Importe mensual (€):'));
+    if(isNaN(importe) || importe<=0) return;
+    const lista = Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]);
+    lista.push({id:uid(), nombre, importe});
+    Store.set(KEYS.AUTONOMO_COSTES_FIJOS, lista);
+    pintar();
+    renderAutonomo();
+  });
+  overlay.classList.add('show');
+}
 function renderAutonomo(){
   const r = resumenTrimestre();
   document.getElementById('au-hero-slot').innerHTML = `
-    <div class="hero" style="margin-bottom:18px;">
+    <div class="hero" style="margin-bottom:12px;">
       <div class="eyebrow">Este trimestre · ${r.label}</div>
       <div class="big num">${fmtEUR(r.neto)}</div>
-      <div class="pill-center"><div class="pill">${r.count} ingresos · ${fmtEUR(r.gastosTrim)} en gastos</div></div>
+      <div class="pill-center"><div class="pill">${r.count} ingresos · ${fmtEUR(r.gastosTrim + r.costesFijosTrim)} en gastos deducibles</div></div>
       <div class="split">
         <div><div class="lbl">Bruto</div><div class="val num">${fmtEUR(r.bruto)}</div></div>
         <div><div class="lbl">Para tu pareja</div><div class="val num">${fmtEUR(r.companera)}</div></div>
         <div><div class="lbl">Por facturar</div><div class="val num">${r.pendienteFacturar}</div></div>
       </div>
-    </div>`;
+    </div>
+    <div class="card pad" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;">
+        <div><div style="font-size:13px;color:var(--text-dim);">Reserva fiscal estimada (Modelo 130)</div>
+          <div class="num" style="font-size:22px;color:var(--orange);">${fmtEUR(r.reservaFiscal)}</div></div>
+        <a id="au-editar-reserva" style="font-size:13px;">✏️ ${r.pctReserva}%</a>
+      </div>
+      <p style="font-size:12px;color:var(--text-dim);margin:0;">Beneficio neto del trimestre (${fmtEUR(r.neto)} − ${fmtEUR(r.gastosTrim)} gastos − ${fmtEUR(r.costesFijosTrim)} costes fijos) × ${r.pctReserva}%. Ve apartando esto — Hacienda no lo retiene solo, hay que pagarlo tú al declarar.</p>
+    </div>
+
+    <div class="section-head"><h2>Balance mensual</h2><a id="au-editar-costes">✏️ Costes fijos</a></div>
+    <div class="card pad" id="au-balance-mensual" style="margin-bottom:18px;"></div>`;
+  renderAutonomoBalanceMensual();
+  document.getElementById('au-editar-reserva').addEventListener('click', openEditarReservaFiscal);
+  document.getElementById('au-editar-costes').addEventListener('click', openEditarCostesFijos);
 
   const clientes = Store.get(KEYS.CLIENTES,[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
   let showAllClientes = auShowAllClientes;
@@ -1419,10 +1532,7 @@ function renderCarteraDetalle(){
   const wrap = document.getElementById('fin-cartera-wrap');
   const elementos = Store.get(KEYS.CARTERA,[]);
   const total = carteraTotal();
-  const grupos = [
-    {titulo:'Fondos indexados', filtro:e=>e.tipo==='Fondo indexado'},
-    {titulo:'Acciones individuales', filtro:e=>e.tipo!=='Fondo indexado'},
-  ];
+  const objetivos = Store.get(KEYS.CARTERA_OBJETIVOS, Object.fromEntries(CARTERA_GRUPOS.map(g=>[g.k,g.objetivo])));
   wrap.innerHTML = `
     <button class="back-btn" id="cartera-back">‹ Finanzas</button>
     <div class="hero" style="margin-bottom:18px;">
@@ -1430,30 +1540,54 @@ function renderCarteraDetalle(){
       <div class="big num">${fmtEUR(total)}</div>
       <div class="pill-center"><div class="pill">${elementos.filter(e=>e.importe>0).length} de ${elementos.length} posiciones con importe</div></div>
     </div>
-    ${grupos.map(g=>`
-      <div class="section-head"><h2>${g.titulo}</h2></div>
+    <div class="section-head"><h2>Cumplimiento del estándar</h2><a id="cartera-editar-objetivos">✏️ Editar objetivos</a></div>
+    <div class="card pad" style="margin-bottom:8px;">
+      ${CARTERA_GRUPOS.map(g=>{
+        const importeGrupo = elementos.filter(e=>e.grupo===g.k).reduce((s,e)=>s+(e.importe||0),0);
+        const pctActual = total>0 ? (importeGrupo/total*100) : 0;
+        const pctObjetivo = objetivos[g.k];
+        const diff = pctActual - pctObjetivo;
+        const enRango = Math.abs(diff) <= 3;
+        const color = enRango ? 'var(--green-deep)' : 'var(--orange)';
+        const estado = enRango ? 'En objetivo' : (diff>0 ? `${diff.toFixed(1)} pts por encima` : `${Math.abs(diff).toFixed(1)} pts por debajo`);
+        return `<div style="margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+            <div><b>${g.nombre}</b></div>
+            <div style="color:${color};">${pctActual.toFixed(1)}% <span style="color:var(--text-dim);">/ ${pctObjetivo}% objetivo</span></div>
+          </div>
+          <div class="track" style="position:relative;">
+            <div class="fill" style="width:${Math.min(pctActual,100)}%;background:${color};"></div>
+            <div style="position:absolute;left:${pctObjetivo}%;top:-2px;bottom:-2px;width:2px;background:var(--ink);opacity:0.5;"></div>
+          </div>
+          <div style="font-size:11px;color:${color};margin-top:3px;">${estado}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    ${CARTERA_GRUPOS.map(g=>`
+      <div class="section-head"><h2>${g.nombre}</h2></div>
       <div class="card">
-        ${elementos.filter(g.filtro).map(e=>`
+        ${elementos.filter(e=>e.grupo===g.k).map(e=>`
           <div class="row">
             <div class="ico" style="background:var(--blue-soft);cursor:pointer;" data-cartera-edit="${e.id}">${e.ic}</div>
             <div class="meta" style="cursor:pointer;" data-cartera-edit="${e.id}"><div class="t1">${e.nombre}</div><div class="t2">${e.detalle}</div></div>
             <div class="side" style="cursor:pointer;" data-cartera-edit="${e.id}"><div class="amt num">${fmtEUR(e.importe||0)}</div>${total>0&&e.importe>0?`<div class="date">${Math.round(e.importe/total*100)}%</div>`:''}</div>
           </div>
-        `).join('')}
+        `).join('') || `<div class="empty"><span class="icn">${g.k==='acciones'?'📊':'🌍'}</span><div class="t">Sin activos en este grupo</div></div>`}
       </div>
     `).join('')}
     <button class="btn btn-outline" id="cartera-add" style="margin-top:4px;">＋ Añadir activo</button>
   `;
   document.getElementById('cartera-back').addEventListener('click', closeCartera);
   document.getElementById('cartera-add').addEventListener('click', openAddCarteraElemento);
+  document.getElementById('cartera-editar-objetivos').addEventListener('click', openEditarObjetivosCartera);
   wrap.querySelectorAll('[data-cartera-edit]').forEach(r=>r.addEventListener('click', ()=>openEditCarteraElemento(r.dataset.carteraEdit)));
 }
 function puedeMoverCartera(elId, dir){
   const elementos = Store.get(KEYS.CARTERA,[]);
   const idx = elementos.findIndex(x=>x.id===elId);
   if(idx<0) return false;
-  const esFondo = elementos[idx].tipo === 'Fondo indexado';
-  const mismoGrupo = e => (e.tipo==='Fondo indexado') === esFondo;
+  const grupoActual = elementos[idx].grupo;
+  const mismoGrupo = e => e.grupo === grupoActual;
   let destino = idx;
   do { destino += (dir==='up' ? -1 : 1); } while(destino>=0 && destino<elementos.length && !mismoGrupo(elementos[destino]));
   return destino>=0 && destino<elementos.length;
@@ -1462,29 +1596,63 @@ function moverElementoCartera(elId, dir){
   const elementos = Store.get(KEYS.CARTERA,[]);
   const idx = elementos.findIndex(x=>x.id===elId);
   if(idx<0) return;
-  const esFondo = elementos[idx].tipo === 'Fondo indexado';
-  const mismoGrupo = e => (e.tipo==='Fondo indexado') === esFondo;
+  const grupoActual = elementos[idx].grupo;
+  const mismoGrupo = e => e.grupo === grupoActual;
   let destino = idx;
   do { destino += (dir==='up' ? -1 : 1); } while(destino>=0 && destino<elementos.length && !mismoGrupo(elementos[destino]));
   if(destino<0 || destino>=elementos.length) return;
   [elementos[idx], elementos[destino]] = [elementos[destino], elementos[idx]];
   Store.set(KEYS.CARTERA, elementos);
 }
+function openEditarObjetivosCartera(){
+  const objetivos = Store.get(KEYS.CARTERA_OBJETIVOS, Object.fromEntries(CARTERA_GRUPOS.map(g=>[g.k,g.objetivo])));
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Objetivos de reparto</h3>
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">El estándar que quieres seguir para cada grupo. Deberían sumar 100%.</p>
+    ${CARTERA_GRUPOS.map(g=>`<div class="field"><label>${g.nombre}</label><input type="number" inputmode="decimal" class="amount" id="obj-${g.k}" value="${objetivos[g.k]}"></div>`).join('')}
+    <p id="obj-suma" style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;"></p>
+    <div class="actions"><button class="btn btn-primary" id="obj-save">Guardar</button></div>
+  `;
+  function actualizarSuma(){
+    const suma = CARTERA_GRUPOS.reduce((s,g)=>s+(parseFloat(document.getElementById('obj-'+g.k).value)||0),0);
+    const el = document.getElementById('obj-suma');
+    el.textContent = `Suma actual: ${suma}%`;
+    el.style.color = Math.abs(suma-100)<0.01 ? 'var(--green-deep)' : 'var(--orange)';
+  }
+  CARTERA_GRUPOS.forEach(g=>document.getElementById('obj-'+g.k).addEventListener('input', actualizarSuma));
+  actualizarSuma();
+  document.getElementById('obj-save').addEventListener('click', ()=>{
+    const nuevos = {};
+    CARTERA_GRUPOS.forEach(g=>{ nuevos[g.k] = parseFloat(document.getElementById('obj-'+g.k).value) || 0; });
+    Store.set(KEYS.CARTERA_OBJETIVOS, nuevos);
+    closeSheet();
+    renderCarteraDetalle();
+  });
+  overlay.classList.add('show');
+}
 function openAddCarteraElemento(){
+  let grupo = 'acciones';
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>Nuevo activo en cartera</h3>
+    <div class="field"><label>Grupo</label><div class="chips" id="cm-grupo-chips">
+      ${CARTERA_GRUPOS.map(g=>`<button class="chip ${g.k===grupo?'active':''}" data-k="${g.k}">${g.nombre}</button>`).join('')}
+    </div></div>
     <div class="field"><label>Nombre</label><input type="text" id="cm-nombre" placeholder="Ej. Amazon"></div>
     <div class="field"><label>Tipo / sector</label><input type="text" id="cm-tipo" placeholder="Ej. Tecnología, Fondo indexado..."></div>
     <div class="field"><label>Detalle (ticker, ISIN...)</label><input type="text" id="cm-detalle" placeholder="Ej. AMZN"></div>
     <div class="field"><label>Emoji</label><input type="text" id="cm-ic" maxlength="4" value="📊"></div>
     <div class="actions"><button class="btn btn-primary" id="cm-save">Añadir</button></div>
   `;
+  document.querySelectorAll('#cm-grupo-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+    grupo = ch.dataset.k;
+    document.querySelectorAll('#cm-grupo-chips .chip').forEach(c=>c.classList.toggle('active', c===ch));
+  }));
   document.getElementById('cm-save').addEventListener('click', ()=>{
     const nombre = document.getElementById('cm-nombre').value.trim();
     if(!nombre){ document.getElementById('cm-nombre').focus(); return; }
     const elementos = Store.get(KEYS.CARTERA,[]);
     elementos.push({
-      id:'custom_'+uid(), nombre,
+      id:'custom_'+uid(), grupo, nombre,
       tipo: document.getElementById('cm-tipo').value.trim() || 'Otros',
       detalle: document.getElementById('cm-detalle').value.trim() || '',
       ic: document.getElementById('cm-ic').value.trim() || '📊',
@@ -1500,8 +1668,12 @@ function openEditCarteraMeta(elId){
   const elementos = Store.get(KEYS.CARTERA,[]);
   const e = elementos.find(x=>x.id===elId);
   if(!e) return;
+  let grupo = e.grupo;
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>Editar ficha del activo</h3>
+    <div class="field"><label>Grupo</label><div class="chips" id="cm-grupo-chips">
+      ${CARTERA_GRUPOS.map(g=>`<button class="chip ${g.k===grupo?'active':''}" data-k="${g.k}">${g.nombre}</button>`).join('')}
+    </div></div>
     <div class="field"><label>Nombre</label><input type="text" id="cm-nombre" value="${e.nombre}"></div>
     <div class="field"><label>Tipo / sector</label><input type="text" id="cm-tipo" value="${e.tipo}"></div>
     <div class="field"><label>Detalle (ticker, ISIN...)</label><input type="text" id="cm-detalle" value="${e.detalle}"></div>
@@ -1509,9 +1681,13 @@ function openEditCarteraMeta(elId){
     <div class="actions"><button class="btn btn-primary" id="cm-save">Guardar cambios</button></div>
     <div style="text-align:center;"><button class="btn-danger" id="cm-delete">Eliminar activo de la cartera</button></div>
   `;
+  document.querySelectorAll('#cm-grupo-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+    grupo = ch.dataset.k;
+    document.querySelectorAll('#cm-grupo-chips .chip').forEach(c=>c.classList.toggle('active', c===ch));
+  }));
   document.getElementById('cm-save').addEventListener('click', ()=>{
     const idx = elementos.findIndex(x=>x.id===elId);
-    elementos[idx] = {...elementos[idx],
+    elementos[idx] = {...elementos[idx], grupo,
       nombre: document.getElementById('cm-nombre').value.trim() || e.nombre,
       tipo: document.getElementById('cm-tipo').value.trim() || e.tipo,
       detalle: document.getElementById('cm-detalle').value.trim(),
@@ -1534,7 +1710,7 @@ function openEditCarteraElemento(elId){
   const elementos = Store.get(KEYS.CARTERA,[]);
   const e = elementos.find(x=>x.id===elId);
   if(!e) return;
-  const esAccion = e.tipo !== 'Fondo indexado';
+  const esAccion = e.grupo === 'acciones';
   const puedeSubir = esAccion && puedeMoverCartera(elId,'up');
   const puedeBajar = esAccion && puedeMoverCartera(elId,'down');
   sheetEl.innerHTML = `
@@ -1856,12 +2032,15 @@ function renderCategoriaFiltro(){
       <div class="pill-center"><div class="pill">${tx.length} movimiento${tx.length===1?'':'s'}</div></div>
     </div>
     <div class="card">
-      ${tx.length ? tx.map(t=>`
+      ${tx.length ? tx.map(t=>{
+        const sub = t.subtipoComida ? SUBTIPO_LABELS[t.subtipoComida] : t.subtipoVehiculo ? SUBTIPO_LABELS[t.subtipoVehiculo] : null;
+        return `
         <div class="row" data-tx="${t.id}" style="cursor:pointer;">
           <div class="ico" style="background:${info.color}">${info.ic}</div>
-          <div class="meta"><div class="t1">${t.note || info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${fmtDate(t.date)}</div></div>
+          <div class="meta"><div class="t1">${t.note || info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${fmtDate(t.date)}${sub?' · '+sub:''}</div></div>
           <div class="side"><div class="amt expense num">−${fmtEUR(t.amount)}</div></div>
-        </div>`).join('') : `<div class="empty"><span class="icn">📎</span><div class="t">Sin movimientos</div></div>`}
+        </div>`;
+      }).join('') : `<div class="empty"><span class="icn">📎</span><div class="t">Sin movimientos</div></div>`}
     </div>`;
   document.getElementById('cf-back').addEventListener('click', ()=>irAFinVista('categoria'));
   wrap.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
@@ -2118,6 +2297,7 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
       </select>
     </div>
     <div id="tx-subtipo-wrap"></div>
+    <div id="tx-subtipo-comida-wrap"></div>
     <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
     ${existing?`<div style="text-align:center;"><button class="btn-danger" id="tx-delete">Eliminar movimiento</button></div>`:''}
   `;
@@ -2142,16 +2322,36 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     }
   }
   document.getElementById('tx-vehiculo').addEventListener('change', renderSubtipoVehiculo);
+  let subtipoComida = existing ? (existing.subtipoComida||null) : null;
+  const SUBTIPOS_COMIDA = [
+    {k:'supermercado', label:'Supermercado', ic:'🛒'},
+    {k:'antojo', label:'Antojo', ic:'🍫'},
+    {k:'suplementacion', label:'Suplementación', ic:'💊'},
+  ];
+  function renderSubtipoComida(){
+    const wrap = document.getElementById('tx-subtipo-comida-wrap');
+    if(type==='expense' && cat==='comida'){
+      if(!subtipoComida) subtipoComida = 'supermercado';
+      wrap.innerHTML = `<div class="field"><label>Tipo de comida</label><div class="chips" id="tx-subtipo-comida-chips">
+        ${SUBTIPOS_COMIDA.map(s=>`<button class="chip ${s.k===subtipoComida?'active':''}" data-k="${s.k}">${s.ic} ${s.label}</button>`).join('')}
+      </div></div>`;
+      wrap.querySelectorAll('#tx-subtipo-comida-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{ subtipoComida=ch.dataset.k; renderSubtipoComida(); }));
+    } else {
+      wrap.innerHTML = '';
+      subtipoComida = null;
+    }
+  }
   function renderCats(){
     const list = type==='expense'?catList('expense'):catList('income');
     if(!cat || !list.find(c=>c.k===cat)) cat = list[0].k;
     document.getElementById('tx-cats').innerHTML = list.map(c=>`<button class="chip ${c.k===cat?'active':''}" data-k="${c.k}">${c.ic} ${c.label}</button>`).join('');
-    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); renderSubtipoVehiculo(); }));
+    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); renderSubtipoVehiculo(); renderSubtipoComida(); }));
   }
   renderCats();
   renderSubtipoVehiculo();
+  renderSubtipoComida();
   document.querySelectorAll('#type-seg button').forEach(b=>b.addEventListener('click', ()=>{
-    type=b.dataset.t; document.querySelectorAll('#type-seg button').forEach(x=>x.classList.toggle('active',x===b)); renderCats(); renderSubtipoVehiculo();
+    type=b.dataset.t; document.querySelectorAll('#type-seg button').forEach(x=>x.classList.toggle('active',x===b)); renderCats(); renderSubtipoVehiculo(); renderSubtipoComida();
   }));
   document.getElementById('tx-save').addEventListener('click', ()=>{
     const amt = parseFloat(document.getElementById('tx-amount').value);
@@ -2162,9 +2362,9 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     const vehiculoId = document.getElementById('tx-vehiculo').value || null;
     if(existing){
       const idx = tx.findIndex(x=>x.id===existing.id);
-      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo};
+      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, subtipoComida};
     } else {
-      tx.push({id:uid(), type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, date:todayISO()});
+      tx.push({id:uid(), type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, subtipoComida, date:todayISO()});
     }
     Store.set(KEYS.TX, tx);
     closeSheet();

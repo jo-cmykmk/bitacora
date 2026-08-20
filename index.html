@@ -216,6 +216,8 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 .btn-row .btn{flex:1;}
 
 .pencil{background:none;border:none;font-size:16px;color:var(--text-dim);cursor:pointer;padding:4px;}
+.reorder-btn{background:none;border:none;font-size:11px;color:var(--text-dim);cursor:pointer;padding:2px 4px;line-height:1;}
+.reorder-btn:disabled{opacity:0.25;}
 .back-btn{background:none;border:none;color:var(--green-deep);font-weight:700;font-size:15px;
   padding:0 0 12px;cursor:pointer;display:flex;align-items:center;gap:2px;}
 
@@ -329,36 +331,10 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
     <!-- FINANZAS -->
     <section class="view" id="view-finanzas">
       <div id="fin-main-wrap">
-      <div class="section-head"><h2>Evolución</h2></div>
-      <div class="card pad">
-        <div class="seg" id="evo-source-seg" style="margin-bottom:12px;">
-          <button data-s="personal" class="active">Personal</button>
-          <button data-s="autonomo">Autónomo</button>
-          <button data-s="todo">Todo</button>
-        </div>
-        <div class="period-row" id="period-chips"></div>
-        <div class="chart-wrap" id="chart-wrap"></div>
-      </div>
-
-      <div class="section-head"><h2>Cartera de inversión</h2><a id="fin-cartera-abrir">Ver cartera →</a></div>
-      <div class="card pad" id="fin-cartera-resumen"></div>
-
-      <div class="section-head"><h2>Ahorro del mes</h2></div>
-      <div class="card pad" id="fin-ahorro"></div>
-
-      <div class="section-head"><h2>Gastos fijos</h2></div>
-      <div class="card" id="fin-recurrentes"></div>
-
-      <div class="section-head"><h2>Recomendaciones</h2></div>
-      <div class="card" id="fin-tips"></div>
-
-      <div class="section-head"><h2>Por categoría</h2></div>
-      <div class="card" id="fin-breakdown"></div>
-
-      <div class="section-head"><h2>Movimientos</h2><a id="fin-toggle">Ver todos →</a></div>
-      <div class="card" id="fin-list"></div>
+        <div class="card" id="fin-menu"></div>
       </div>
       <div id="fin-cartera-wrap" style="display:none;"></div>
+      <div id="fin-detail-wrap" style="display:none;"></div>
     </section>
 
     <!-- VEHICULOS -->
@@ -401,7 +377,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.13';
+const APP_VERSION = '2026-08-01.16';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -409,7 +385,8 @@ const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs',
   CLIENTES:'bitacora_au_clientes', INGRESOS_AU:'bitacora_au_ingresos', GASTOS_AU:'bitacora_au_gastos',
   SERVER_URL:'bitacora_server_url', SERVER_KEY:'bitacora_server_key', CAT_EXPENSE_CUSTOM:'bitacora_cat_expense_custom',
   CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden', CAT_INCOME_CUSTOM:'bitacora_cat_income_custom',
-  CAT_INCOME_HIDDEN:'bitacora_cat_income_hidden', CAT_OVERRIDES:'bitacora_cat_overrides', CARTERA:'bitacora_cartera' };
+  CAT_INCOME_HIDDEN:'bitacora_cat_income_hidden', CAT_OVERRIDES:'bitacora_cat_overrides', CARTERA:'bitacora_cartera',
+  FIN_MENU_ORDEN:'bitacora_fin_menu_orden' };
 
 // Estas claves son ajustes de ESTE dispositivo (a qué servidor hablar) — nunca se sincronizan.
 const LOCAL_ONLY_KEYS = new Set([KEYS.SERVER_URL, KEYS.SERVER_KEY]);
@@ -533,6 +510,7 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CAT_INCOME_HIDDEN,null)===null) Store.set(KEYS.CAT_INCOME_HIDDEN,[]);
   if(Store.get(KEYS.CAT_OVERRIDES,null)===null) Store.set(KEYS.CAT_OVERRIDES,{});
   if(Store.get(KEYS.CARTERA,null)===null) Store.set(KEYS.CARTERA, CARTERA_ELEMENTOS_INICIALES.map(e=>({...e, importe:0})));
+  if(Store.get(KEYS.FIN_MENU_ORDEN,null)===null) Store.set(KEYS.FIN_MENU_ORDEN, ['evolucion','cartera','ahorro','recurrentes','recomendaciones','categoria','movimientos']);
 }
 
 /* ============ CATEGORIES ============ */
@@ -1118,7 +1096,7 @@ function showView(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.view===name));
   renderHeader();
   if(name==='inicio') renderInicio();
-  if(name==='finanzas') renderFinanzas();
+  if(name==='finanzas'){ finVista='menu'; renderFinanzas(); }
   if(name==='vehiculos') renderVehiculosList();
   if(name==='autonomo') renderAutonomo();
 }
@@ -1312,14 +1290,13 @@ function renderInicio(){
   document.getElementById('ini-movs').innerHTML = tx.length ? tx.map(t=>{
     const info = catInfo(t.category);
     return `<div class="row" data-tx="${t.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
-      <div class="meta"><div class="t1">${info.label}</div><div class="t2">${t.note?t.note:fmtDate(t.date)}</div></div>
+      <div class="meta"><div class="t1">${t.note?t.note:info.label}</div><div class="t2">${info.label}</div></div>
       <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div></div></div>`;
   }).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin movimientos</div><div class="d">Regístralos con el botón +</div></div>`;
   document.querySelectorAll('#ini-movs [data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
 }
 
 /* ============ FINANZAS ============ */
-document.getElementById('fin-toggle').addEventListener('click', ()=>{ showAllTx=!showAllTx; renderFinanzas(); });
 
 const PERIODS = [
   {k:'semana', label:'Semana', days:7},
@@ -1384,7 +1361,7 @@ function renderChart(points){
   `;
 }
 
-function renderTips(){
+function renderTipsData(){
   const cur = monthTotals(0);
   const prev = monthTotals(-1);
   const tips = [];
@@ -1406,6 +1383,10 @@ function renderTips(){
     const pct = Math.round(top[1]/cur.exp*100);
     if(pct>=35) tips.push({ic:'🏷️', txt:`${catInfo(top[0]).label} se lleva el ${pct}% de tu gasto este mes.`});
   }
+  return tips;
+}
+function renderTips(){
+  const tips = renderTipsData();
   const el = document.getElementById('fin-tips');
   el.innerHTML = tips.length ? tips.map(t=>`<div class="tip-row"><div class="ico">${t.ic}</div><div class="txt">${t.txt}</div></div>`).join('')
     : `<div class="empty"><span class="icn illo">${ILLO_TIPS}</span><div class="t">Aún sin recomendaciones</div><div class="d">Registra unos movimientos y aparecerán aquí</div></div>`;
@@ -1457,7 +1438,6 @@ function renderCarteraDetalle(){
             <div class="ico" style="background:var(--blue-soft);cursor:pointer;" data-cartera-edit="${e.id}">${e.ic}</div>
             <div class="meta" style="cursor:pointer;" data-cartera-edit="${e.id}"><div class="t1">${e.nombre}</div><div class="t2">${e.detalle}</div></div>
             <div class="side" style="cursor:pointer;" data-cartera-edit="${e.id}"><div class="amt num">${fmtEUR(e.importe||0)}</div>${total>0&&e.importe>0?`<div class="date">${Math.round(e.importe/total*100)}%</div>`:''}</div>
-            <button class="pencil" data-cartera-meta="${e.id}" style="margin-left:6px;">⚙️</button>
           </div>
         `).join('')}
       </div>
@@ -1467,7 +1447,28 @@ function renderCarteraDetalle(){
   document.getElementById('cartera-back').addEventListener('click', closeCartera);
   document.getElementById('cartera-add').addEventListener('click', openAddCarteraElemento);
   wrap.querySelectorAll('[data-cartera-edit]').forEach(r=>r.addEventListener('click', ()=>openEditCarteraElemento(r.dataset.carteraEdit)));
-  wrap.querySelectorAll('[data-cartera-meta]').forEach(r=>r.addEventListener('click', ()=>openEditCarteraMeta(r.dataset.carteraMeta)));
+}
+function puedeMoverCartera(elId, dir){
+  const elementos = Store.get(KEYS.CARTERA,[]);
+  const idx = elementos.findIndex(x=>x.id===elId);
+  if(idx<0) return false;
+  const esFondo = elementos[idx].tipo === 'Fondo indexado';
+  const mismoGrupo = e => (e.tipo==='Fondo indexado') === esFondo;
+  let destino = idx;
+  do { destino += (dir==='up' ? -1 : 1); } while(destino>=0 && destino<elementos.length && !mismoGrupo(elementos[destino]));
+  return destino>=0 && destino<elementos.length;
+}
+function moverElementoCartera(elId, dir){
+  const elementos = Store.get(KEYS.CARTERA,[]);
+  const idx = elementos.findIndex(x=>x.id===elId);
+  if(idx<0) return;
+  const esFondo = elementos[idx].tipo === 'Fondo indexado';
+  const mismoGrupo = e => (e.tipo==='Fondo indexado') === esFondo;
+  let destino = idx;
+  do { destino += (dir==='up' ? -1 : 1); } while(destino>=0 && destino<elementos.length && !mismoGrupo(elementos[destino]));
+  if(destino<0 || destino>=elementos.length) return;
+  [elementos[idx], elementos[destino]] = [elementos[destino], elementos[idx]];
+  Store.set(KEYS.CARTERA, elementos);
 }
 function openAddCarteraElemento(){
   sheetEl.innerHTML = `
@@ -1533,14 +1534,27 @@ function openEditCarteraElemento(elId){
   const elementos = Store.get(KEYS.CARTERA,[]);
   const e = elementos.find(x=>x.id===elId);
   if(!e) return;
+  const esAccion = e.tipo !== 'Fondo indexado';
+  const puedeSubir = esAccion && puedeMoverCartera(elId,'up');
+  const puedeBajar = esAccion && puedeMoverCartera(elId,'down');
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>${e.nombre}</h3>
     <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">${e.detalle}</p>
     <div class="card pad" style="margin-bottom:16px;"><div class="num" style="font-size:22px;">${fmtEUR(e.importe||0)}</div><div style="font-size:12px;color:var(--text-dim);">Valor actual</div></div>
     <button class="btn btn-primary" id="ce-aportar" style="margin-bottom:10px;">➕ Aportar dinero nuevo</button>
-    <button class="btn btn-outline" id="ce-actualizar">✏️ Corregir / actualizar valor de mercado</button>
+    <button class="btn btn-outline" id="ce-actualizar" style="margin-bottom:10px;">✏️ Corregir / actualizar valor de mercado</button>
+    <button class="btn btn-outline" id="ce-editar-ficha" style="margin-bottom:10px;">⚙️ Editar ficha del activo</button>
+    ${esAccion ? `<div class="btn-row">
+      <button class="btn btn-outline" id="ce-subir" ${puedeSubir?'':'disabled'}>⬆️ Mover arriba</button>
+      <button class="btn btn-outline" id="ce-bajar" ${puedeBajar?'':'disabled'}>⬇️ Mover abajo</button>
+    </div>` : ''}
     <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">Usa "Aportar" cuando metas dinero de verdad (se descuenta de Finanzas). Usa "Corregir" solo para ajustar la cifra a como esté el mercado ahora, o arreglar un error — eso no mueve dinero de ningún sitio.</p>
   `;
+  document.getElementById('ce-editar-ficha').addEventListener('click', ()=>openEditCarteraMeta(elId));
+  if(esAccion){
+    if(puedeSubir) document.getElementById('ce-subir').addEventListener('click', ()=>{ moverElementoCartera(elId,'up'); closeSheet(); renderCarteraDetalle(); });
+    if(puedeBajar) document.getElementById('ce-bajar').addEventListener('click', ()=>{ moverElementoCartera(elId,'down'); closeSheet(); renderCarteraDetalle(); });
+  }
   document.getElementById('ce-aportar').addEventListener('click', ()=>{
     sheetEl.innerHTML = `
       <div class="handle"></div><h3>Aportar a ${e.nombre}</h3>
@@ -1679,43 +1693,138 @@ function renderAhorro(){
   `;
 }
 
-function renderFinanzas(){
-  renderAhorro();
-  renderRecurrentes();
-  renderCarteraResumen();
-  document.getElementById('fin-cartera-abrir').onclick = openCartera;
-  document.querySelectorAll('#evo-source-seg button').forEach(b=>{
-    b.classList.toggle('active', b.dataset.s===evoSource);
-    b.onclick = ()=>{ evoSource=b.dataset.s; renderFinanzas(); };
-  });
-  document.getElementById('period-chips').innerHTML = PERIODS.map(p=>
-    `<button class="chip ${p.k===evoPeriod?'active':''}" data-p="${p.k}">${p.label}</button>`).join('');
-  document.querySelectorAll('#period-chips .chip').forEach(c=>c.addEventListener('click', ()=>{
-    evoPeriod=c.dataset.p; renderFinanzas();
-  }));
-  renderChart(evolutionSeries(evoPeriod, evoSource));
-  renderTips();
+let finVista = 'menu'; // 'menu' | 'cartera' | 'evolucion' | 'ahorro' | 'recurrentes' | 'recomendaciones' | 'categoria' | 'movimientos' | 'categoria-filtro'
+let finCategoriaFiltro = null;
 
+function renderFinanzas(){
+  const mainWrap = document.getElementById('fin-main-wrap');
+  const carteraWrap = document.getElementById('fin-cartera-wrap');
+  const detailWrap = document.getElementById('fin-detail-wrap');
+  mainWrap.style.display = finVista==='menu' ? 'block' : 'none';
+  carteraWrap.style.display = finVista==='cartera' ? 'block' : 'none';
+  detailWrap.style.display = (finVista!=='menu' && finVista!=='cartera') ? 'block' : 'none';
+  if(finVista==='menu') renderFinMenu();
+  else if(finVista==='cartera') renderCarteraDetalle();
+  else if(finVista==='categoria-filtro') renderCategoriaFiltro();
+  else renderFinDetail(finVista);
+}
+function irAFinVista(v){ finVista=v; renderFinanzas(); }
+function irACategoriaFiltro(cat){ finCategoriaFiltro=cat; finVista='categoria-filtro'; renderFinanzas(); }
+function openCartera(){ irAFinVista('cartera'); }
+function closeCartera(){ irAFinVista('menu'); }
+
+const FIN_MENU_META = [
+  {tipo:'evolucion', ic:'📈', titulo:'Evolución'},
+  {tipo:'cartera', ic:'📊', titulo:'Cartera de inversión'},
+  {tipo:'ahorro', ic:'💰', titulo:'Ahorro del mes'},
+  {tipo:'recurrentes', ic:'🔁', titulo:'Gastos fijos'},
+  {tipo:'recomendaciones', ic:'💡', titulo:'Recomendaciones'},
+  {tipo:'categoria', ic:'🗂️', titulo:'Por categoría'},
+  {tipo:'movimientos', ic:'🧾', titulo:'Movimientos'},
+];
+function finMenuOrdenCompleto(){
+  const guardado = Store.get(KEYS.FIN_MENU_ORDEN, []);
+  const todos = FIN_MENU_META.map(m=>m.tipo);
+  const valido = guardado.filter(t=>todos.includes(t));
+  todos.forEach(t=>{ if(!valido.includes(t)) valido.push(t); }); // por si se añade una sección nueva en el futuro
+  return valido;
+}
+function renderFinMenu(){
+  const el = document.getElementById('fin-menu');
+  const cur = monthTotals(financeMonthOffset);
+  const ahorroMes = baseAhorroMes(cur.mk) - cur.exp;
+  const recFijos = Store.get(KEYS.TX,[]).filter(t=>t.recurrente);
+  const totalFijos = new Set(recFijos.map(t=>(t.note&&t.note.trim())||('cat:'+t.category))).size;
+  const totalFijosImp = (()=>{ const g={}; recFijos.forEach(t=>{ const k=(t.note&&t.note.trim())||('cat:'+t.category); if(!g[k]||new Date(t.date)>new Date(g[k].date)) g[k]=t; }); return Object.values(g).filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0); })();
+  const nTips = renderTipsData().length;
+  const catTop = (()=>{ const tx=Store.get(KEYS.TX,[]).filter(t=>t.type==='expense'&&monthKeyOf(t.date)===cur.mk); if(!tx.length) return null; const g={}; tx.forEach(t=>g[t.category]=(g[t.category]||0)+t.amount); return Object.entries(g).sort((a,b)=>b[1]-a[1])[0]; })();
+  const nMovs = Store.get(KEYS.TX,[]).filter(t=>monthKeyOf(t.date)===cur.mk).length;
+
+  const items = [
+    {tipo:'evolucion', ic:'📈', color:'var(--blue-soft)', titulo:'Evolución', sub:'Ingresos y gastos en el tiempo'},
+    {tipo:'cartera', ic:'📊', color:'var(--blue-soft)', titulo:'Cartera de inversión', sub:fmtEUR(carteraTotal())},
+    {tipo:'ahorro', ic:'💰', color:'var(--green-soft)', titulo:'Ahorro del mes', sub:fmtEUR(ahorroMes)},
+    {tipo:'recurrentes', ic:'🔁', color:'var(--orange-soft)', titulo:'Gastos fijos', sub: totalFijos? `${fmtEUR(totalFijosImp)} / mes`:'Ninguno todavía'},
+    {tipo:'recomendaciones', ic:'💡', color:'var(--yellow-soft)', titulo:'Recomendaciones', sub: nTips? `${nTips} disponible${nTips===1?'':'s'}`:'Sin novedades'},
+    {tipo:'categoria', ic:'🗂️', color:'var(--blue-soft)', titulo:'Por categoría', sub: catTop? `${catInfo(catTop[0]).label}: ${fmtEUR(catTop[1])}`:'Sin gastos este mes'},
+    {tipo:'movimientos', ic:'🧾', color:'var(--green-soft)', titulo:'Movimientos', sub:`${nMovs} este mes`},
+  ];
+  const orden = finMenuOrdenCompleto();
+  items.sort((a,b)=> orden.indexOf(a.tipo) - orden.indexOf(b.tipo));
+  el.innerHTML = items.map(i=>`
+    <div class="row" data-nav="${i.tipo}" style="cursor:pointer;">
+      <div class="ico" style="background:${i.color}">${i.ic}</div>
+      <div class="meta"><div class="t1">${i.titulo}</div><div class="t2">${i.sub}</div></div>
+      <div class="chev">›</div>
+    </div>`).join('');
+  el.querySelectorAll('[data-nav]').forEach(r=>r.addEventListener('click', ()=>irAFinVista(r.dataset.nav)));
+}
+
+function renderFinDetail(tipo){
+  const wrap = document.getElementById('fin-detail-wrap');
+  const configs = {
+    evolucion: { titulo:'Evolución', body:`
+      <div class="card pad">
+        <div class="seg" id="evo-source-seg" style="margin-bottom:12px;">
+          <button data-s="personal" class="active">Personal</button>
+          <button data-s="autonomo">Autónomo</button>
+          <button data-s="todo">Todo</button>
+        </div>
+        <div class="period-row" id="period-chips"></div>
+        <div class="chart-wrap" id="chart-wrap"></div>
+      </div>`,
+      after: ()=>{
+        document.querySelectorAll('#evo-source-seg button').forEach(b=>{
+          b.classList.toggle('active', b.dataset.s===evoSource);
+          b.onclick = ()=>{ evoSource=b.dataset.s; renderFinDetail('evolucion'); };
+        });
+        document.getElementById('period-chips').innerHTML = PERIODS.map(p=>`<button class="chip ${p.k===evoPeriod?'active':''}" data-p="${p.k}">${p.label}</button>`).join('');
+        document.querySelectorAll('#period-chips .chip').forEach(c=>c.addEventListener('click', ()=>{ evoPeriod=c.dataset.p; renderFinDetail('evolucion'); }));
+        renderChart(evolutionSeries(evoPeriod, evoSource));
+      }
+    },
+    ahorro: { titulo:'Ahorro del mes', body:`<div class="card pad" id="fin-ahorro"></div>`, after: renderAhorro },
+    recurrentes: { titulo:'Gastos fijos', body:`<div class="card" id="fin-recurrentes"></div>`, after: renderRecurrentes },
+    recomendaciones: { titulo:'Recomendaciones', body:`<div class="card" id="fin-tips"></div>`, after: renderTips },
+    categoria: { titulo:'Por categoría', body:`<div class="card" id="fin-breakdown"></div>`, after: renderBreakdown },
+    movimientos: { titulo:'Movimientos', body:`
+      <div class="section-head" style="margin-top:0;"><a id="fin-toggle">Ver todos →</a></div>
+      <div class="card" id="fin-list"></div>`, after: renderMovList },
+  };
+  const c = configs[tipo];
+  wrap.innerHTML = `<button class="back-btn" id="fd-back">‹ Finanzas</button>
+    <h2 style="margin:4px 0 14px;font-size:20px;">${c.titulo}</h2>
+    ${c.body}`;
+  document.getElementById('fd-back').addEventListener('click', closeFinDetail);
+  c.after();
+}
+function closeFinDetail(){ irAFinVista('menu'); }
+
+function renderMovList(){
   const tx = Store.get(KEYS.TX,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
   document.getElementById('fin-toggle').textContent = showAllTx ? '← Ver menos' : 'Ver todos →';
+  document.getElementById('fin-toggle').onclick = ()=>{ showAllTx=!showAllTx; renderFinDetail('movimientos'); };
   const listEl = document.getElementById('fin-list');
   if(!tx.length){
     listEl.innerHTML = `<div class="empty"><span class="icn">🧾</span><div class="t">Sin movimientos</div>
       <div class="d">Regístralos con el botón +</div></div>`;
-  } else {
-    const shown = showAllTx ? tx : tx.slice(0,5);
-    listEl.innerHTML = shown.map(t=>{
-      const info = catInfo(t.category);
-      return `<div class="row" data-tx="${t.id}" style="cursor:pointer;">
-        <div class="ico" style="background:${info.color}">${info.ic}</div>
-        <div class="meta"><div class="t1">${info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${t.note ? t.note : fmtDate(t.date)}</div></div>
-        <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div><div class="date">${fmtDate(t.date)}</div></div>
-      </div>`;
-    }).join('');
-    listEl.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
+    return;
   }
+  const shown = showAllTx ? tx : tx.slice(0,5);
+  listEl.innerHTML = shown.map(t=>{
+    const info = catInfo(t.category);
+    return `<div class="row" data-tx="${t.id}" style="cursor:pointer;">
+      <div class="ico" style="background:${info.color}">${info.ic}</div>
+      <div class="meta"><div class="t1">${t.note ? t.note : info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${info.label}</div></div>
+      <div class="side"><div class="amt ${t.type} num">${t.type==='income'?'+':'−'} ${fmtEUR(t.amount)}</div><div class="date">${fmtDate(t.date)}</div></div>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
+}
 
+function renderBreakdown(){
   const cur = monthTotals(financeMonthOffset);
+  const tx = Store.get(KEYS.TX,[]);
   const monthExp = tx.filter(t=>monthKeyOf(t.date)===cur.mk && t.type==='expense');
   const totalExp = monthExp.reduce((s,t)=>s+t.amount,0) || 1;
   const byCat = {};
@@ -1724,10 +1833,38 @@ function renderFinanzas(){
   const bEl = document.getElementById('fin-breakdown');
   bEl.innerHTML = rows.length ? rows.map(([cat,amt])=>{
     const info = catInfo(cat); const pct = Math.round(amt/totalExp*100);
-    return `<div class="bd-row"><div class="name">${info.ic} ${info.label}</div>
+    return `<div class="bd-row" data-cat="${cat}" style="cursor:pointer;"><div class="name">${info.ic} ${info.label}</div>
       <div class="track"><div class="fill" style="width:${pct}%"></div></div>
       <div class="amt num">${fmtEUR(amt)}</div></div>`;
   }).join('') : `<div class="empty"><span class="icn">📊</span><div class="t">Sin gastos este mes</div></div>`;
+  bEl.querySelectorAll('[data-cat]').forEach(r=>r.addEventListener('click', ()=>irACategoriaFiltro(r.dataset.cat)));
+}
+
+function renderCategoriaFiltro(){
+  const wrap = document.getElementById('fin-detail-wrap');
+  const cat = finCategoriaFiltro;
+  const info = catInfo(cat);
+  const cur = monthTotals(financeMonthOffset);
+  const tx = Store.get(KEYS.TX,[]).filter(t=>t.type==='expense' && t.category===cat && monthKeyOf(t.date)===cur.mk)
+    .reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const total = tx.reduce((s,t)=>s+t.amount,0);
+  wrap.innerHTML = `
+    <button class="back-btn" id="cf-back">‹ Por categoría</button>
+    <div class="hero" style="margin-bottom:18px;">
+      <div class="eyebrow">${info.ic} ${info.label} · este mes</div>
+      <div class="big num">${fmtEUR(total)}</div>
+      <div class="pill-center"><div class="pill">${tx.length} movimiento${tx.length===1?'':'s'}</div></div>
+    </div>
+    <div class="card">
+      ${tx.length ? tx.map(t=>`
+        <div class="row" data-tx="${t.id}" style="cursor:pointer;">
+          <div class="ico" style="background:${info.color}">${info.ic}</div>
+          <div class="meta"><div class="t1">${t.note || info.label}${t.recurrente?' 🔁':''}</div><div class="t2">${fmtDate(t.date)}</div></div>
+          <div class="side"><div class="amt expense num">−${fmtEUR(t.amount)}</div></div>
+        </div>`).join('') : `<div class="empty"><span class="icn">📎</span><div class="t">Sin movimientos</div></div>`}
+    </div>`;
+  document.getElementById('cf-back').addEventListener('click', ()=>irAFinVista('categoria'));
+  wrap.querySelectorAll('[data-tx]').forEach(r=>r.addEventListener('click', ()=>openTxSheet(null,null,null,r.dataset.tx)));
 }
 
 /* ============ VEHICULOS ============ */
@@ -2148,6 +2285,9 @@ function openAjustesSheet(){
       <div id="set-cats-list-income"></div>
       <button class="btn btn-outline" id="set-cat-add-income" style="margin-top:8px;">＋ Añadir categoría</button>
     </div>
+    <div class="field"><label>Orden del menú de Finanzas</label>
+      <div id="set-fin-orden-list"></div>
+    </div>
     <div class="field"><label>Servidor (datos + facturación)</label>
       <input type="text" id="set-server-url" placeholder="https://tu-servidor.onrender.com" value="${Store.get(KEYS.SERVER_URL,'')}">
       <input type="text" id="set-server-key" placeholder="Clave APP_API_KEY" value="${Store.get(KEYS.SERVER_KEY,'')}" style="margin-top:8px;">
@@ -2177,6 +2317,7 @@ function openAjustesSheet(){
   });
   renderCatsSettings('expense');
   renderCatsSettings('income');
+  renderFinOrdenSettings();
   document.getElementById('set-cat-add-expense').addEventListener('click', ()=>openAddCategoriaSheet('expense'));
   document.getElementById('set-cat-add-income').addEventListener('click', ()=>openAddCategoriaSheet('income'));
   document.getElementById('set-server-save').addEventListener('click', ()=>{
@@ -2213,6 +2354,28 @@ function openAjustesSheet(){
 }
 document.getElementById('settings-btn').addEventListener('click', openAjustesSheet);
 
+function renderFinOrdenSettings(){
+  const el = document.getElementById('set-fin-orden-list');
+  if(!el) return;
+  const orden = finMenuOrdenCompleto();
+  const items = orden.map(t=>FIN_MENU_META.find(m=>m.tipo===t));
+  el.innerHTML = items.map((it,i)=>`
+    <div class="row" style="padding:8px 0;">
+      <div class="ico" style="background:var(--blue-soft);width:32px;height:32px;font-size:15px;">${it.ic}</div>
+      <div class="meta"><div class="t1" style="font-size:14px;">${it.titulo}</div></div>
+      <button class="reorder-btn" data-fin-mover="${it.tipo}" data-dir="up" ${i===0?'disabled':''} style="font-size:16px;padding:4px 8px;">▲</button>
+      <button class="reorder-btn" data-fin-mover="${it.tipo}" data-dir="down" ${i===items.length-1?'disabled':''} style="font-size:16px;padding:4px 8px;">▼</button>
+    </div>`).join('');
+  el.querySelectorAll('[data-fin-mover]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const orden = finMenuOrdenCompleto();
+    const idx = orden.indexOf(btn.dataset.finMover);
+    const destino = btn.dataset.dir==='up' ? idx-1 : idx+1;
+    if(destino<0 || destino>=orden.length) return;
+    [orden[idx], orden[destino]] = [orden[destino], orden[idx]];
+    Store.set(KEYS.FIN_MENU_ORDEN, orden);
+    renderFinOrdenSettings();
+  }));
+}
 function renderCatsSettings(tipo){
   const {base, custom: customKey, hidden: hiddenKey} = catKeys(tipo);
   const ocultas = Store.get(hiddenKey,[]);

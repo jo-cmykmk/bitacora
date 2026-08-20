@@ -375,7 +375,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.22';
+const APP_VERSION = '2026-08-01.23';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -499,17 +499,34 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CLIENTES,null)===null){
     Store.set(KEYS.CLIENTES, CLIENTES_INICIALES.map(([nombre,nif])=>({id:uid(), nombre, nif})));
   }
-  // Migración de ingresos antiguos (tipo -> compartido + requiereFactura)
+  // Migración de ingresos antiguos (tipo -> compartido + requiereFactura) - ahora con tres opciones mutuamente excluyentes
   let ingresos = Store.get(KEYS.INGRESOS_AU,[]);
   let migrado = false;
   ingresos = ingresos.map(i=>{
-    if(!i.hasOwnProperty('compartido') && !i.hasOwnProperty('requiereFactura')){
+    if(!i.hasOwnProperty('tipo') || i.tipo === 'efectivo'){
+      // Si no tiene tipo o es efectivo, lo dejamos como efectivo (sin compartir ni facturar)
+      if(!i.hasOwnProperty('tipo')) migrado = true;
+      return {
+        ...i,
+        tipo: i.tipo || 'efectivo',
+        compartido: false,
+        requiereFactura: false
+      };
+    } else if(i.tipo === 'compartido'){
       migrado = true;
       return {
         ...i,
-        compartido: i.tipo === 'compartido',
-        requiereFactura: i.tipo === 'facturar',
-        tipo: 'efectivo' // mantenemos compatibilidad
+        tipo: 'efectivo', // mantenemos compatibilidad
+        compartido: true,
+        requiereFactura: false
+      };
+    } else if(i.tipo === 'facturar'){
+      migrado = true;
+      return {
+        ...i,
+        tipo: 'efectivo',
+        compartido: false,
+        requiereFactura: true
       };
     }
     return i;
@@ -781,6 +798,12 @@ const SESION_TIPOS = [
   {nombre:'Intervención psicopedagógica en domicilio', precio:110},
 ];
 
+const INGRESO_TIPOS_AU = [
+  {k:'efectivo', label:'Efectivo', ic:'💵', color:'var(--green-soft)', desc:'Sin compartir ni facturar'},
+  {k:'compartido', label:'Compartido 30%', ic:'🤝', color:'var(--blue-soft)', desc:'El 30% va para Laura'},
+  {k:'facturar', label:'Facturar', ic:'🧾', color:'var(--orange-soft)', desc:'Requiere factura'},
+];
+
 function trimestreActual(){
   const now = new Date();
   const t = Math.floor(now.getMonth()/3)+1;
@@ -798,7 +821,7 @@ function resumenTrimestre(){
   const neto = ingresos.reduce((s,i)=>s+ingresoNeto(i),0);
   const pendienteFacturar = ingresos.filter(i=>i.requiereFactura && !i.facturado).length;
   const gastosTrim = Store.get(KEYS.GASTOS_AU,[]).filter(g=> new Date(g.date) >= inicio).reduce((s,g)=>s+g.importe,0);
-  const costesFijosTrim = autonomoCostesFijosTotal(); // ya NO multiplicamos por 3
+  const costesFijosTrim = autonomoCostesFijosTotal();
   const beneficioNeto = neto - gastosTrim - costesFijosTrim;
   const pctReserva = Store.get(KEYS.AUTONOMO_RESERVA_PCT, 20);
   const reservaFiscal = Math.max(0, beneficioNeto) * (pctReserva/100);
@@ -926,10 +949,10 @@ function renderAutonomo(){
   const shownIng = showAllIng ? ingresos : ingresos.slice(0,6);
   document.getElementById('au-ingresos-toggle').textContent = showAllIng ? '← Ver menos' : 'Ver todos →';
   document.getElementById('au-ingresos-list').innerHTML = ingresos.length ? shownIng.map(i=>{
-    const etiqueta = (i.compartido?'🤝 Compartido ':'') + (i.requiereFactura?'🧾 Facturar':'💵 Efectivo');
-    return `<div class="row" data-ing="${i.id}" style="cursor:pointer;"><div class="ico" style="background:${i.compartido?'var(--blue-soft)':'var(--green-soft)'}">${i.compartido?'🤝':'💵'}</div>
+    const info = INGRESO_TIPOS_AU.find(t=>t.k===i.tipo) || INGRESO_TIPOS_AU[0];
+    return `<div class="row" data-ing="${i.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
       <div class="meta"><div class="t1">${clienteNombre(i.clienteId)}${i.concepto? ' · '+i.concepto:''}</div>
-        <div class="t2">${fmtDate(i.date)} · ${etiqueta}${i.requiereFactura?(i.facturado?' · facturado':' · pendiente'):''}</div></div>
+        <div class="t2">${fmtDate(i.date)} · ${info.label}${i.requiereFactura?(i.facturado?' · facturado':' · pendiente'):''}</div></div>
       <div class="side"><div class="amt income num">${fmtEUR(ingresoNeto(i))}</div></div>
       <div class="chev">›</div></div>`;
   }).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin ingresos todavía</div><div class="d">Regístralos con el botón +</div></div>`;
@@ -1028,8 +1051,7 @@ function openAddClienteSheet(onDone){
 
 function openIngresoSheet(ingresoId){
   const existing = ingresoId ? Store.get(KEYS.INGRESOS_AU,[]).find(x=>x.id===ingresoId) : null;
-  let compartido = existing ? existing.compartido : false;
-  let requiereFactura = existing ? existing.requiereFactura : false;
+  let tipo = existing ? existing.tipo : 'efectivo';
   let clienteId = existing ? existing.clienteId : null;
   const render = ()=>{
     const clientes = Store.get(KEYS.CLIENTES,[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -1045,19 +1067,16 @@ function openIngresoSheet(ingresoId){
       </div>
       <div class="field"><label>Concepto</label><input type="text" id="ing-concepto" placeholder="Ej. Sesión individual" value="${existing?existing.concepto||'':''}"></div>
       <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="ing-importe" placeholder="0,00" value="${existing?existing.importe:''}"></div>
-      <div class="field" style="margin-bottom:4px;">
-        <div class="check-row"><input type="checkbox" id="ing-compartido" ${compartido?'checked':''}><label for="ing-compartido">🤝 Compartido 30% (Laura)</label></div>
-        <div class="check-row"><input type="checkbox" id="ing-facturar" ${requiereFactura?'checked':''}><label for="ing-facturar">🧾 Requiere factura</label></div>
-      </div>
-      <div id="ing-preview" style="font-size:13px;color:var(--text-dim);margin:0 0 14px;"></div>
-      ${existing && existing.requiereFactura ? (
+      <div class="field"><label>Tipo</label><div class="chips" id="ing-tipos"></div></div>
+      <div id="ing-preview" style="font-size:13px;color:var(--text-dim);margin:-6px 0 14px;"></div>
+      ${existing && existing.tipo==='facturar' ? (
         existing.facturado
         ? `<div class="card pad" style="background:var(--green-soft);margin-bottom:10px;">✅ Ya facturado — nº ${existing.numeroFactura||'—'}</div>
            ${existing.facturaId ? `<button class="btn btn-outline" id="ing-ver-pdf" style="margin-bottom:10px;">📄 Ver / descargar PDF</button>` : ''}`
         : `<button class="btn btn-secondary" id="ing-generar-factura" style="margin-bottom:14px;">🧾 Generar factura ahora</button>
            <div id="ing-factura-estado" style="font-size:13px;color:var(--text-dim);margin:-6px 0 14px;"></div>`
       ) : ''}
-      ${existing && existing.requiereFactura && !existing.facturaId ? `
+      ${existing && existing.tipo==='facturar' && !existing.facturaId ? `
         <button class="btn btn-outline" id="ing-vincular" style="margin-bottom:10px;">🔗 Vincular factura ya creada (por número)</button>
         <div id="ing-vincular-estado" style="font-size:13px;color:var(--text-dim);margin:-4px 0 14px;"></div>
       ` : ''}
@@ -1067,7 +1086,7 @@ function openIngresoSheet(ingresoId){
     if(existing && existing.facturado && existing.facturaId){
       document.getElementById('ing-ver-pdf').addEventListener('click', e=> verFacturaPDF(existing, e.target));
     }
-    if(existing && existing.requiereFactura && !existing.facturaId){
+    if(existing && existing.tipo==='facturar' && !existing.facturaId){
       document.getElementById('ing-vincular').addEventListener('click', async ()=>{
         const numero = prompt('Escribe el número de factura tal como aparece en FacturaDirecta (ej. F263275):', existing.numeroFactura||'');
         if(!numero || !numero.trim()) return;
@@ -1102,7 +1121,7 @@ function openIngresoSheet(ingresoId){
         }
       });
     }
-    if(existing && existing.requiereFactura && !existing.facturado){
+    if(existing && existing.tipo==='facturar' && !existing.facturado){
       document.getElementById('ing-generar-factura').addEventListener('click', async ()=>{
         const btn = document.getElementById('ing-generar-factura');
         btn.disabled = true;
@@ -1126,15 +1145,41 @@ function openIngresoSheet(ingresoId){
       document.querySelectorAll('#ing-sesiones .chip').forEach(c=>c.classList.toggle('active', c===ch));
       updatePreview();
     }));
-    document.getElementById('ing-compartido').addEventListener('change', e=>{ compartido = e.target.checked; updatePreview(); });
-    document.getElementById('ing-facturar').addEventListener('change', e=>{ requiereFactura = e.target.checked; updatePreview(); });
+    document.getElementById('ing-tipos').innerHTML = INGRESO_TIPOS_AU.map(t=>
+      `<button class="chip ${t.k===tipo?'active':''}" data-k="${t.k}">${t.ic} ${t.label}</button>`).join('');
+    document.querySelectorAll('#ing-tipos .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+      tipo = ch.dataset.k;
+      // Actualizar los flags para que ingresoNeto/Companera funcionen
+      // 'efectivo' no activa nada, 'compartido' activa compartido, 'facturar' activa requiereFactura
+      const ingresosTemp = Store.get(KEYS.INGRESOS_AU,[]);
+      const idx = ingresosTemp.findIndex(x=>x.id===existing?.id);
+      if(idx>-1){
+        ingresosTemp[idx].tipo = tipo;
+        ingresosTemp[idx].compartido = (tipo === 'compartido');
+        ingresosTemp[idx].requiereFactura = (tipo === 'facturar');
+        Store.set(KEYS.INGRESOS_AU, ingresosTemp);
+        // Actualizar existing local
+        if(existing){
+          existing.tipo = tipo;
+          existing.compartido = (tipo === 'compartido');
+          existing.requiereFactura = (tipo === 'facturar');
+        }
+      }
+      document.querySelectorAll('#ing-tipos .chip').forEach(c=>c.classList.toggle('active', c===ch));
+      updatePreview();
+    }));
+    // Inicializar los flags según el tipo al abrir
+    if(existing){
+      existing.compartido = (tipo === 'compartido');
+      existing.requiereFactura = (tipo === 'facturar');
+    }
     document.getElementById('ing-importe').addEventListener('input', updatePreview);
     updatePreview();
     function updatePreview(){
       const amt = parseFloat(document.getElementById('ing-importe').value) || 0;
       const prev = document.getElementById('ing-preview');
-      if(compartido && amt>0) prev.textContent = `Para tu pareja: ${fmtEUR(amt*0.3)} · Neto para ti: ${fmtEUR(amt*0.7)}`;
-      else if(requiereFactura && amt>0) prev.textContent = `Quedará pendiente de facturar hasta que generes la factura.`;
+      if(tipo==='compartido' && amt>0) prev.textContent = `Para tu pareja: ${fmtEUR(amt*0.3)} · Neto para ti: ${fmtEUR(amt*0.7)}`;
+      else if(tipo==='facturar' && amt>0) prev.textContent = `Quedará pendiente de facturar hasta que generes la factura.`;
       else prev.textContent = '';
     }
     document.getElementById('ing-save').addEventListener('click', ()=>{
@@ -1142,11 +1187,14 @@ function openIngresoSheet(ingresoId){
       if(!amt || amt<=0){ document.getElementById('ing-importe').focus(); return; }
       const ingresos = Store.get(KEYS.INGRESOS_AU,[]);
       const concepto = document.getElementById('ing-concepto').value.trim();
+      // Determinar flags según tipo
+      const compartido = (tipo === 'compartido');
+      const requiereFactura = (tipo === 'facturar');
       if(existing){
         const idx = ingresos.findIndex(x=>x.id===existing.id);
-        ingresos[idx] = {...ingresos[idx], clienteId, concepto, importe:amt, compartido, requiereFactura};
+        ingresos[idx] = {...ingresos[idx], clienteId, concepto, importe:amt, tipo, compartido, requiereFactura};
       } else {
-        ingresos.push({ id:uid(), date:todayISO(), clienteId, concepto, importe:amt, compartido, requiereFactura, facturado:false, numeroFactura:null });
+        ingresos.push({ id:uid(), date:todayISO(), clienteId, concepto, importe:amt, tipo, compartido, requiereFactura, facturado:false, numeroFactura:null });
       }
       Store.set(KEYS.INGRESOS_AU, ingresos);
       closeSheet();
@@ -2302,13 +2350,15 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
       <div class="check-row"><input type="checkbox" id="tx-deducible" ${deducible?'checked':''}><label for="tx-deducible">🧾 Deducible (autónomo)</label></div>
       ${photoFieldHTML('tx-photo')}
     ` : ''}
-    <div class="field"><label>Vehículo relacionado (opcional)</label>
-      <select id="tx-vehiculo">
-        <option value="">— Ninguno —</option>
-        ${Store.get(KEYS.VEH,[]).map(v=>`<option value="${v.id}" ${existing&&existing.vehiculoId===v.id?'selected':''}>${v.name}</option>`).join('')}
-      </select>
+    <div id="tx-vehiculo-wrap" style="display:none;">
+      <div class="field"><label>Vehículo relacionado (opcional)</label>
+        <select id="tx-vehiculo">
+          <option value="">— Ninguno —</option>
+          ${Store.get(KEYS.VEH,[]).map(v=>`<option value="${v.id}" ${existing&&existing.vehiculoId===v.id?'selected':''}>${v.name}</option>`).join('')}
+        </select>
+      </div>
+      <div id="tx-subtipo-wrap"></div>
     </div>
-    <div id="tx-subtipo-wrap"></div>
     <div id="tx-subtipo-comida-wrap"></div>
     <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
     ${existing?`<div style="text-align:center;"><button class="btn-danger" id="tx-delete">Eliminar movimiento</button></div>`:''}
@@ -2331,6 +2381,16 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     } else {
       wrap.innerHTML = '';
       subtipoVehiculo = null;
+    }
+  }
+  // Control de visibilidad del bloque de vehículo
+  function toggleVehiculoWrap(){
+    const wrap = document.getElementById('tx-vehiculo-wrap');
+    if(type==='expense' && cat==='vehiculo'){
+      wrap.style.display = 'block';
+      renderSubtipoVehiculo();
+    } else {
+      wrap.style.display = 'none';
     }
   }
   document.getElementById('tx-vehiculo').addEventListener('change', renderSubtipoVehiculo);
@@ -2357,10 +2417,10 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     const list = type==='expense'?catList('expense'):catList('income');
     if(!cat || !list.find(c=>c.k===cat)) cat = list[0].k;
     document.getElementById('tx-cats').innerHTML = list.map(c=>`<button class="chip ${c.k===cat?'active':''}" data-k="${c.k}">${c.ic} ${c.label}</button>`).join('');
-    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); renderSubtipoVehiculo(); renderSubtipoComida(); }));
+    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); toggleVehiculoWrap(); renderSubtipoVehiculo(); renderSubtipoComida(); }));
   }
   renderCats();
-  renderSubtipoVehiculo();
+  toggleVehiculoWrap();
   renderSubtipoComida();
   // Recoger foto
   const getPhoto = () => {
@@ -2379,7 +2439,7 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
       if(dedWrap) dedWrap.style.display = 'none';
       if(fotoWrap) fotoWrap.style.display = 'none';
     }
-    renderCats(); renderSubtipoVehiculo(); renderSubtipoComida();
+    renderCats(); toggleVehiculoWrap(); renderSubtipoVehiculo(); renderSubtipoComida();
   }));
   // Inicializar visibilidad
   if(type!=='expense'){
@@ -2394,7 +2454,7 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     const tx = Store.get(KEYS.TX,[]);
     const note = document.getElementById('tx-note').value.trim();
     const recurrente = document.getElementById('tx-recurrente').checked;
-    const vehiculoId = document.getElementById('tx-vehiculo').value || null;
+    const vehiculoId = document.getElementById('tx-vehiculo')?.value || null;
     const deducibleChecked = document.getElementById('tx-deducible')?.checked || false;
     const photo = getPhoto();
     // Si es gasto y deducible, crear/actualizar gasto en KEYS.GASTOS_AU

@@ -375,7 +375,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.21';
+const APP_VERSION = '2026-08-01.22';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -499,6 +499,22 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CLIENTES,null)===null){
     Store.set(KEYS.CLIENTES, CLIENTES_INICIALES.map(([nombre,nif])=>({id:uid(), nombre, nif})));
   }
+  // Migración de ingresos antiguos (tipo -> compartido + requiereFactura)
+  let ingresos = Store.get(KEYS.INGRESOS_AU,[]);
+  let migrado = false;
+  ingresos = ingresos.map(i=>{
+    if(!i.hasOwnProperty('compartido') && !i.hasOwnProperty('requiereFactura')){
+      migrado = true;
+      return {
+        ...i,
+        compartido: i.tipo === 'compartido',
+        requiereFactura: i.tipo === 'facturar',
+        tipo: 'efectivo' // mantenemos compatibilidad
+      };
+    }
+    return i;
+  });
+  if(migrado) Store.set(KEYS.INGRESOS_AU, ingresos);
   if(Store.get(KEYS.INGRESOS_AU,null)===null) Store.set(KEYS.INGRESOS_AU,[]);
   if(Store.get(KEYS.GASTOS_AU,null)===null) Store.set(KEYS.GASTOS_AU,[]);
   if(Store.get(KEYS.SERVER_URL,null)===null) Store.set(KEYS.SERVER_URL,'https://jon98.tail918520.ts.net');
@@ -513,26 +529,6 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CARTERA_OBJETIVOS,null)===null) Store.set(KEYS.CARTERA_OBJETIVOS, Object.fromEntries(CARTERA_GRUPOS.map(g=>[g.k,g.objetivo])));
   if(Store.get(KEYS.AUTONOMO_COSTES_FIJOS,null)===null) Store.set(KEYS.AUTONOMO_COSTES_FIJOS, [{id:uid(), nombre:'Cuota de autónomo + alquiler espacio', importe:370}]);
   if(Store.get(KEYS.AUTONOMO_RESERVA_PCT,null)===null) Store.set(KEYS.AUTONOMO_RESERVA_PCT, 20);
-
-  // Migración de ingresos de autónomo: tipo antiguo (compartido/facturar) -> nuevos campos booleano
-  const ingresos = Store.get(KEYS.INGRESOS_AU, []);
-  let migrado = false;
-  ingresos.forEach(i => {
-    if (i.tipo && !i.compartido && !i.requiereFactura) {
-      if (i.tipo === 'compartido') {
-        i.compartido = true;
-        i.requiereFactura = false;
-      } else if (i.tipo === 'facturar') {
-        i.compartido = false;
-        i.requiereFactura = true;
-      } else {
-        i.compartido = false;
-        i.requiereFactura = false;
-      }
-      migrado = true;
-    }
-  });
-  if (migrado) Store.set(KEYS.INGRESOS_AU, ingresos);
 }
 
 /* ============ CATEGORIES ============ */
@@ -802,7 +798,7 @@ function resumenTrimestre(){
   const neto = ingresos.reduce((s,i)=>s+ingresoNeto(i),0);
   const pendienteFacturar = ingresos.filter(i=>i.requiereFactura && !i.facturado).length;
   const gastosTrim = Store.get(KEYS.GASTOS_AU,[]).filter(g=> new Date(g.date) >= inicio).reduce((s,g)=>s+g.importe,0);
-  const costesFijosTrim = autonomoCostesFijosTotal(); // ya NO multiplicamos por 3, usamos el total mensual tal cual
+  const costesFijosTrim = autonomoCostesFijosTotal(); // ya NO multiplicamos por 3
   const beneficioNeto = neto - gastosTrim - costesFijosTrim;
   const pctReserva = Store.get(KEYS.AUTONOMO_RESERVA_PCT, 20);
   const reservaFiscal = Math.max(0, beneficioNeto) * (pctReserva/100);
@@ -1737,50 +1733,4 @@ function openEditCarteraElemento(elId){
     </div>` : ''}
     <p style="font-size:12px;color:var(--text-dim);margin:10px 0 0;">Usa "Aportar" cuando metas dinero de verdad (se descuenta de Finanzas). Usa "Corregir" solo para ajustar la cifra a como esté el mercado ahora, o arreglar un error — eso no mueve dinero de ningún sitio.</p>
   `;
-  document.getElementById('ce-editar-ficha').addEventListener('click', ()=>openEditCarteraMeta(elId));
-  if(esAccion){
-    if(puedeSubir) document.getElementById('ce-subir').addEventListener('click', ()=>{ moverElementoCartera(elId,'up'); closeSheet(); renderCarteraDetalle(); });
-    if(puedeBajar) document.getElementById('ce-bajar').addEventListener('click', ()=>{ moverElementoCartera(elId,'down'); closeSheet(); renderCarteraDetalle(); });
-  }
-  document.getElementById('ce-aportar').addEventListener('click', ()=>{
-    sheetEl.innerHTML = `
-      <div class="handle"></div><h3>Aportar a ${e.nombre}</h3>
-      <div class="field"><label>Importe a aportar</label><input type="number" inputmode="decimal" class="amount" id="ce-aporte" placeholder="0,00"></div>
-      <div class="actions"><button class="btn btn-primary" id="ce-aporte-siguiente">Siguiente</button></div>
-    `;
-    document.getElementById('ce-aporte-siguiente').addEventListener('click', ()=>{
-      const aporte = parseFloat(document.getElementById('ce-aporte').value);
-      if(!aporte || aporte<=0){ document.getElementById('ce-aporte').focus(); return; }
-      preguntarSiCrearGasto(aporte, e.nombre, (crear)=>{
-        if(crear){
-          preguntarOrigenCartera(aporte, (origen)=>{
-            guardarCambioCartera(elId, (e.importe||0)+aporte, aporte, origen, e.nombre);
-          });
-        } else {
-          guardarCambioCartera(elId, (e.importe||0)+aporte, 0, null, e.nombre);
-        }
-      });
-    });
-  });
-  document.getElementById('ce-actualizar').addEventListener('click', ()=>{
-    sheetEl.innerHTML = `
-      <div class="handle"></div><h3>Corregir valor de ${e.nombre}</h3>
-      <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">Esto solo ajusta la cifra mostrada — no crea ningún movimiento en Finanzas.</p>
-      <div class="field"><label>Nuevo valor</label><input type="number" inputmode="decimal" class="amount" id="ce-importe" value="${e.importe||0}"></div>
-      <div class="actions"><button class="btn btn-primary" id="ce-save">Guardar</button></div>
-    `;
-    document.getElementById('ce-save').addEventListener('click', ()=>{
-      const nuevo = parseFloat(document.getElementById('ce-importe').value);
-      if(isNaN(nuevo) || nuevo<0){ document.getElementById('ce-importe').focus(); return; }
-      guardarCambioCartera(elId, nuevo, 0, null, e.nombre);
-    });
-  });
-  overlay.classList.add('show');
-}
-function preguntarSiCrearGasto(aporte, nombreElemento, onRespuesta){
-  sheetEl.innerHTML = `
-    <div class="handle"></div><h3>¿Registrar como gasto?</h3>
-    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">¿Quieres que ${fmtEUR(aporte)} a ${nombreElemento} se registre también como un gasto de "Inversión" en Finanzas?</p>
-    <div class="actions" style="flex-direction:column;gap:10px;">
-      <button class="btn btn-primary" id="crear-si">Sí, créalo</button>
-      <button class="btn btn-outline" id="
+  document.getElementById('ce-editar-ficha').addEventListener('click', ()=>

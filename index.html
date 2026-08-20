@@ -33,6 +33,7 @@
   --shadow:0 20px 40px -18px rgba(21,23,18,0.16),0 2px 8px -2px rgba(21,23,18,0.06);
   --safe-top:env(safe-area-inset-top);
   --safe-bottom:env(safe-area-inset-bottom);
+  /* hero panels */
   --hero-from:#123524;
   --hero-to:#1F6B44;
   --hero-veh-from:#0D0F0B;
@@ -44,6 +45,7 @@
   --hero-chip-bg:rgba(255,255,255,0.10);
   --hero-chip-border:rgba(255,255,255,0.14);
   --hero-exp:#F3B69E;
+  /* vehicle badge */
   --veh-badge-from:var(--green);
   --veh-badge-to:#0E100C;
   --veh-badge-fg:#FFFFFF;
@@ -375,7 +377,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.23';
+const APP_VERSION = '2026-08-01.21';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -499,39 +501,6 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CLIENTES,null)===null){
     Store.set(KEYS.CLIENTES, CLIENTES_INICIALES.map(([nombre,nif])=>({id:uid(), nombre, nif})));
   }
-  // Migración de ingresos antiguos (tipo -> compartido + requiereFactura) - ahora con tres opciones mutuamente excluyentes
-  let ingresos = Store.get(KEYS.INGRESOS_AU,[]);
-  let migrado = false;
-  ingresos = ingresos.map(i=>{
-    if(!i.hasOwnProperty('tipo') || i.tipo === 'efectivo'){
-      // Si no tiene tipo o es efectivo, lo dejamos como efectivo (sin compartir ni facturar)
-      if(!i.hasOwnProperty('tipo')) migrado = true;
-      return {
-        ...i,
-        tipo: i.tipo || 'efectivo',
-        compartido: false,
-        requiereFactura: false
-      };
-    } else if(i.tipo === 'compartido'){
-      migrado = true;
-      return {
-        ...i,
-        tipo: 'efectivo', // mantenemos compatibilidad
-        compartido: true,
-        requiereFactura: false
-      };
-    } else if(i.tipo === 'facturar'){
-      migrado = true;
-      return {
-        ...i,
-        tipo: 'efectivo',
-        compartido: false,
-        requiereFactura: true
-      };
-    }
-    return i;
-  });
-  if(migrado) Store.set(KEYS.INGRESOS_AU, ingresos);
   if(Store.get(KEYS.INGRESOS_AU,null)===null) Store.set(KEYS.INGRESOS_AU,[]);
   if(Store.get(KEYS.GASTOS_AU,null)===null) Store.set(KEYS.GASTOS_AU,[]);
   if(Store.get(KEYS.SERVER_URL,null)===null) Store.set(KEYS.SERVER_URL,'https://jon98.tail918520.ts.net');
@@ -691,8 +660,17 @@ const ILLO_TIPS = `<svg width="72" height="56" viewBox="0 0 72 56" fill="none">
 </svg>`;
 
 /* ============ AUTÓNOMO ============ */
-function ingresoNeto(ing){ return ing.compartido ? ing.importe*0.7 : ing.importe; }
-function ingresoCompanera(ing){ return ing.compartido ? ing.importe*0.3 : 0; }
+function ingresoEtiquetas(ing){
+  const c = esCompartido(ing), f = requiereFactura(ing);
+  if(c && f) return {ic:'🤝🧾', color:'var(--orange-soft)', label:'Compartido + Facturar'};
+  if(f) return {ic:'🧾', color:'var(--orange-soft)', label:'Facturar'};
+  if(c) return {ic:'🤝', color:'var(--blue-soft)', label:'Compartido 30%'};
+  return {ic:'💵', color:'var(--green-soft)', label:'Efectivo'};
+}
+function esCompartido(ing){ return ing.compartido!==undefined ? ing.compartido : ing.tipo==='compartido'; }
+function requiereFactura(ing){ return ing.requiereFactura!==undefined ? ing.requiereFactura : ing.tipo==='facturar'; }
+function ingresoNeto(ing){ return esCompartido(ing) ? ing.importe*0.7 : ing.importe; }
+function ingresoCompanera(ing){ return esCompartido(ing) ? ing.importe*0.3 : 0; }
 function clienteNombre(id){ const c = Store.get(KEYS.CLIENTES,[]).find(x=>x.id===id); return c ? c.nombre : 'Sin cliente'; }
 function clienteObj(id){ return Store.get(KEYS.CLIENTES,[]).find(x=>x.id===id) || {nombre:'', nif:''}; }
 
@@ -798,17 +776,18 @@ const SESION_TIPOS = [
   {nombre:'Intervención psicopedagógica en domicilio', precio:110},
 ];
 
-const INGRESO_TIPOS_AU = [
-  {k:'efectivo', label:'Efectivo', ic:'💵', color:'var(--green-soft)', desc:'Sin compartir ni facturar'},
-  {k:'compartido', label:'Compartido 30%', ic:'🤝', color:'var(--blue-soft)', desc:'El 30% va para Laura'},
-  {k:'facturar', label:'Facturar', ic:'🧾', color:'var(--orange-soft)', desc:'Requiere factura'},
-];
-
 function trimestreActual(){
   const now = new Date();
   const t = Math.floor(now.getMonth()/3)+1;
   const inicio = new Date(now.getFullYear(), (t-1)*3, 1);
   return {t, year:now.getFullYear(), inicio};
+}
+function gastosDeduciblesTodos(){
+  const propios = Store.get(KEYS.GASTOS_AU,[]).map(g=>({...g, origen:'autonomo'}));
+  const finanzas = Store.get(KEYS.TX,[]).filter(t=>t.type==='expense' && t.deducible).map(t=>({
+    id:t.id, date:t.date, descripcion:t.note||catInfo(t.category).label, importe:t.amount, photo:t.photo||null, origen:'finanzas'
+  }));
+  return propios.concat(finanzas);
 }
 function autonomoCostesFijosTotal(){
   return Store.get(KEYS.AUTONOMO_COSTES_FIJOS,[]).reduce((s,c)=>s+(c.importe||0),0);
@@ -819,8 +798,8 @@ function resumenTrimestre(){
   const bruto = ingresos.reduce((s,i)=>s+i.importe,0);
   const companera = ingresos.reduce((s,i)=>s+ingresoCompanera(i),0);
   const neto = ingresos.reduce((s,i)=>s+ingresoNeto(i),0);
-  const pendienteFacturar = ingresos.filter(i=>i.requiereFactura && !i.facturado).length;
-  const gastosTrim = Store.get(KEYS.GASTOS_AU,[]).filter(g=> new Date(g.date) >= inicio).reduce((s,g)=>s+g.importe,0);
+  const pendienteFacturar = ingresos.filter(i=>requiereFactura(i) && !i.facturado).length;
+  const gastosTrim = gastosDeduciblesTodos().filter(g=> new Date(g.date) >= inicio).reduce((s,g)=>s+g.importe,0);
   const costesFijosTrim = autonomoCostesFijosTotal();
   const beneficioNeto = neto - gastosTrim - costesFijosTrim;
   const pctReserva = Store.get(KEYS.AUTONOMO_RESERVA_PCT, 20);
@@ -832,7 +811,7 @@ function autonomoBalanceMes(offset){
   const mk = monthKeyOf(d);
   const ingresos = Store.get(KEYS.INGRESOS_AU,[]).filter(i=>monthKeyOf(i.date)===mk);
   const ingresosNetos = ingresos.reduce((s,i)=>s+ingresoNeto(i),0);
-  const gastos = Store.get(KEYS.GASTOS_AU,[]).filter(g=>monthKeyOf(g.date)===mk).reduce((s,g)=>s+g.importe,0);
+  const gastos = gastosDeduciblesTodos().filter(g=>monthKeyOf(g.date)===mk).reduce((s,g)=>s+g.importe,0);
   const costesFijos = autonomoCostesFijosTotal();
   return {mk, ingresosNetos, gastos, costesFijos, balance: -costesFijos + ingresosNetos - gastos};
 }
@@ -949,29 +928,30 @@ function renderAutonomo(){
   const shownIng = showAllIng ? ingresos : ingresos.slice(0,6);
   document.getElementById('au-ingresos-toggle').textContent = showAllIng ? '← Ver menos' : 'Ver todos →';
   document.getElementById('au-ingresos-list').innerHTML = ingresos.length ? shownIng.map(i=>{
-    const info = INGRESO_TIPOS_AU.find(t=>t.k===i.tipo) || INGRESO_TIPOS_AU[0];
+    const info = ingresoEtiquetas(i);
     return `<div class="row" data-ing="${i.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
       <div class="meta"><div class="t1">${clienteNombre(i.clienteId)}${i.concepto? ' · '+i.concepto:''}</div>
-        <div class="t2">${fmtDate(i.date)} · ${info.label}${i.requiereFactura?(i.facturado?' · facturado':' · pendiente'):''}</div></div>
+        <div class="t2">${fmtDate(i.date)} · ${info.label}${requiereFactura(i)?(i.facturado?' · facturado':' · pendiente'):''}</div></div>
       <div class="side"><div class="amt income num">${fmtEUR(ingresoNeto(i))}</div></div>
       <div class="chev">›</div></div>`;
   }).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin ingresos todavía</div><div class="d">Regístralos con el botón +</div></div>`;
   document.querySelectorAll('#au-ingresos-list [data-ing]').forEach(r=>r.addEventListener('click', ()=>openIngresoSheet(r.dataset.ing)));
 
-  const gastos = Store.get(KEYS.GASTOS_AU,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const gastos = gastosDeduciblesTodos().sort((a,b)=>new Date(b.date)-new Date(a.date));
   let showAllGas = auShowAllGastos;
   const shownGas = showAllGas ? gastos : gastos.slice(0,6);
   document.getElementById('au-gastos-toggle').textContent = showAllGas ? '← Ver menos' : 'Ver todos →';
   document.getElementById('au-gastos-list').innerHTML = gastos.length ? shownGas.map(g=>`
-    <div class="row" data-gas="${g.id}" style="cursor:pointer;"><div class="ico" style="background:var(--orange-soft)">🧾</div>
-      <div class="meta"><div class="t1">${g.descripcion}</div><div class="t2">${fmtDate(g.date)}</div></div>
+    <div class="row" data-gas="${g.id}" data-origen="${g.origen}" style="cursor:pointer;"><div class="ico" style="background:var(--orange-soft)">🧾</div>
+      <div class="meta"><div class="t1">${g.descripcion}</div><div class="t2">${fmtDate(g.date)}${g.origen==='finanzas'?' · desde Finanzas':''}</div></div>
       ${g.photo?`<img class="thumb" src="${g.photo}" data-src="${g.photo}">`:''}
       <div class="side"><div class="amt expense num">${fmtEUR(g.importe)}</div></div>
       <div class="chev">›</div></div>
   `).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin gastos todavía</div><div class="d">Registra uno con foto de la factura</div></div>`;
   document.querySelectorAll('#au-gastos-list [data-gas]').forEach(r=>r.addEventListener('click', e=>{
     if(e.target.classList.contains('thumb')) return; // el tap en la miniatura abre el visor, no la edición
-    openGastoSheet(r.dataset.gas);
+    if(r.dataset.origen==='finanzas') openTxSheet(null,null,null,r.dataset.gas);
+    else openGastoSheet(r.dataset.gas);
   }));
   document.querySelectorAll('#au-gastos-list .thumb').forEach(img=>img.addEventListener('click', ()=>openLightbox(img.dataset.src)));
 }
@@ -1051,7 +1031,8 @@ function openAddClienteSheet(onDone){
 
 function openIngresoSheet(ingresoId){
   const existing = ingresoId ? Store.get(KEYS.INGRESOS_AU,[]).find(x=>x.id===ingresoId) : null;
-  let tipo = existing ? existing.tipo : 'efectivo';
+  let compartido = existing ? esCompartido(existing) : false;
+  let reqFactura = existing ? requiereFactura(existing) : false;
   let clienteId = existing ? existing.clienteId : null;
   const render = ()=>{
     const clientes = Store.get(KEYS.CLIENTES,[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -1067,16 +1048,19 @@ function openIngresoSheet(ingresoId){
       </div>
       <div class="field"><label>Concepto</label><input type="text" id="ing-concepto" placeholder="Ej. Sesión individual" value="${existing?existing.concepto||'':''}"></div>
       <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="ing-importe" placeholder="0,00" value="${existing?existing.importe:''}"></div>
-      <div class="field"><label>Tipo</label><div class="chips" id="ing-tipos"></div></div>
+      <div class="field"><label>Tipo</label><div class="chips">
+        <button type="button" class="chip" id="ing-chip-compartido">🤝 Compartido 30%</button>
+        <button type="button" class="chip" id="ing-chip-facturar">🧾 Facturar</button>
+      </div></div>
       <div id="ing-preview" style="font-size:13px;color:var(--text-dim);margin:-6px 0 14px;"></div>
-      ${existing && existing.tipo==='facturar' ? (
+      ${existing && reqFactura ? (
         existing.facturado
         ? `<div class="card pad" style="background:var(--green-soft);margin-bottom:10px;">✅ Ya facturado — nº ${existing.numeroFactura||'—'}</div>
            ${existing.facturaId ? `<button class="btn btn-outline" id="ing-ver-pdf" style="margin-bottom:10px;">📄 Ver / descargar PDF</button>` : ''}`
         : `<button class="btn btn-secondary" id="ing-generar-factura" style="margin-bottom:14px;">🧾 Generar factura ahora</button>
            <div id="ing-factura-estado" style="font-size:13px;color:var(--text-dim);margin:-6px 0 14px;"></div>`
       ) : ''}
-      ${existing && existing.tipo==='facturar' && !existing.facturaId ? `
+      ${existing && reqFactura && !existing.facturaId ? `
         <button class="btn btn-outline" id="ing-vincular" style="margin-bottom:10px;">🔗 Vincular factura ya creada (por número)</button>
         <div id="ing-vincular-estado" style="font-size:13px;color:var(--text-dim);margin:-4px 0 14px;"></div>
       ` : ''}
@@ -1086,7 +1070,7 @@ function openIngresoSheet(ingresoId){
     if(existing && existing.facturado && existing.facturaId){
       document.getElementById('ing-ver-pdf').addEventListener('click', e=> verFacturaPDF(existing, e.target));
     }
-    if(existing && existing.tipo==='facturar' && !existing.facturaId){
+    if(existing && reqFactura && !existing.facturaId){
       document.getElementById('ing-vincular').addEventListener('click', async ()=>{
         const numero = prompt('Escribe el número de factura tal como aparece en FacturaDirecta (ej. F263275):', existing.numeroFactura||'');
         if(!numero || !numero.trim()) return;
@@ -1121,7 +1105,7 @@ function openIngresoSheet(ingresoId){
         }
       });
     }
-    if(existing && existing.tipo==='facturar' && !existing.facturado){
+    if(existing && reqFactura && !existing.facturado){
       document.getElementById('ing-generar-factura').addEventListener('click', async ()=>{
         const btn = document.getElementById('ing-generar-factura');
         btn.disabled = true;
@@ -1145,56 +1129,39 @@ function openIngresoSheet(ingresoId){
       document.querySelectorAll('#ing-sesiones .chip').forEach(c=>c.classList.toggle('active', c===ch));
       updatePreview();
     }));
-    document.getElementById('ing-tipos').innerHTML = INGRESO_TIPOS_AU.map(t=>
-      `<button class="chip ${t.k===tipo?'active':''}" data-k="${t.k}">${t.ic} ${t.label}</button>`).join('');
-    document.querySelectorAll('#ing-tipos .chip').forEach(ch=>ch.addEventListener('click', ()=>{
-      tipo = ch.dataset.k;
-      // Actualizar los flags para que ingresoNeto/Companera funcionen
-      // 'efectivo' no activa nada, 'compartido' activa compartido, 'facturar' activa requiereFactura
-      const ingresosTemp = Store.get(KEYS.INGRESOS_AU,[]);
-      const idx = ingresosTemp.findIndex(x=>x.id===existing?.id);
-      if(idx>-1){
-        ingresosTemp[idx].tipo = tipo;
-        ingresosTemp[idx].compartido = (tipo === 'compartido');
-        ingresosTemp[idx].requiereFactura = (tipo === 'facturar');
-        Store.set(KEYS.INGRESOS_AU, ingresosTemp);
-        // Actualizar existing local
-        if(existing){
-          existing.tipo = tipo;
-          existing.compartido = (tipo === 'compartido');
-          existing.requiereFactura = (tipo === 'facturar');
-        }
-      }
-      document.querySelectorAll('#ing-tipos .chip').forEach(c=>c.classList.toggle('active', c===ch));
+    document.getElementById('ing-chip-compartido').classList.toggle('active', compartido);
+    document.getElementById('ing-chip-facturar').classList.toggle('active', reqFactura);
+    document.getElementById('ing-chip-compartido').addEventListener('click', ()=>{
+      compartido = !compartido;
+      document.getElementById('ing-chip-compartido').classList.toggle('active', compartido);
       updatePreview();
-    }));
-    // Inicializar los flags según el tipo al abrir
-    if(existing){
-      existing.compartido = (tipo === 'compartido');
-      existing.requiereFactura = (tipo === 'facturar');
-    }
+    });
+    document.getElementById('ing-chip-facturar').addEventListener('click', ()=>{
+      reqFactura = !reqFactura;
+      document.getElementById('ing-chip-facturar').classList.toggle('active', reqFactura);
+      updatePreview();
+      if(existing) render(); // para mostrar/ocultar el bloque de generar factura al vuelo
+    });
     document.getElementById('ing-importe').addEventListener('input', updatePreview);
     updatePreview();
     function updatePreview(){
       const amt = parseFloat(document.getElementById('ing-importe').value) || 0;
       const prev = document.getElementById('ing-preview');
-      if(tipo==='compartido' && amt>0) prev.textContent = `Para tu pareja: ${fmtEUR(amt*0.3)} · Neto para ti: ${fmtEUR(amt*0.7)}`;
-      else if(tipo==='facturar' && amt>0) prev.textContent = `Quedará pendiente de facturar hasta que generes la factura.`;
-      else prev.textContent = '';
+      const partes = [];
+      if(compartido && amt>0) partes.push(`Para tu pareja: ${fmtEUR(amt*0.3)} · Neto para ti: ${fmtEUR(amt*0.7)}`);
+      if(reqFactura && amt>0) partes.push(`Quedará pendiente de facturar hasta que generes la factura.`);
+      prev.textContent = partes.join(' — ');
     }
     document.getElementById('ing-save').addEventListener('click', ()=>{
       const amt = parseFloat(document.getElementById('ing-importe').value);
       if(!amt || amt<=0){ document.getElementById('ing-importe').focus(); return; }
       const ingresos = Store.get(KEYS.INGRESOS_AU,[]);
       const concepto = document.getElementById('ing-concepto').value.trim();
-      // Determinar flags según tipo
-      const compartido = (tipo === 'compartido');
-      const requiereFactura = (tipo === 'facturar');
       if(existing){
         const idx = ingresos.findIndex(x=>x.id===existing.id);
-        ingresos[idx] = {...ingresos[idx], clienteId, concepto, importe:amt, tipo, compartido, requiereFactura};
+        ingresos[idx] = {...ingresos[idx], clienteId, concepto, importe:amt, compartido, requiereFactura:reqFactura};
       } else {
-        ingresos.push({ id:uid(), date:todayISO(), clienteId, concepto, importe:amt, tipo, compartido, requiereFactura, facturado:false, numeroFactura:null });
+        ingresos.push({ id:uid(), date:todayISO(), clienteId, concepto, importe:amt, compartido, requiereFactura:reqFactura, facturado:false, numeroFactura:null });
       }
       Store.set(KEYS.INGRESOS_AU, ingresos);
       closeSheet();
@@ -2335,7 +2302,9 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
   const existing = txId ? Store.get(KEYS.TX,[]).find(x=>x.id===txId) : null;
   let type = existing ? existing.type : (presetType || 'expense');
   let cat = existing ? existing.category : null;
-  let deducible = existing ? existing.deducible : false;
+  let recurrente = existing ? !!existing.recurrente : false;
+  let deducible = existing ? !!existing.deducible : false;
+  let vehiculoIdSel = existing ? (existing.vehiculoId||null) : null;
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>${existing?'Editar movimiento':'Nuevo movimiento'}</h3>
     <div class="field"><div class="seg" id="type-seg">
@@ -2345,24 +2314,40 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="tx-amount" placeholder="0,00" value="${existing?existing.amount:(presetAmount!=null?presetAmount:'')}"></div>
     <div class="field"><label>Categoría</label><div class="chips" id="tx-cats"></div></div>
     <div class="field"><label>Nota (opcional)</label><input type="text" id="tx-note" placeholder="Ej. Cena con Marta" value="${existing?(existing.note||'').replace(/"/g,'&quot;'):(presetNote?presetNote.replace(/"/g,'&quot;'):'')}"></div>
-    <div class="check-row"><input type="checkbox" id="tx-recurrente" ${existing&&existing.recurrente?'checked':''}><label for="tx-recurrente">🔁 Es recurrente (se repite cada mes)</label></div>
-    ${type==='expense' ? `
-      <div class="check-row"><input type="checkbox" id="tx-deducible" ${deducible?'checked':''}><label for="tx-deducible">🧾 Deducible (autónomo)</label></div>
-      ${photoFieldHTML('tx-photo')}
-    ` : ''}
-    <div id="tx-vehiculo-wrap" style="display:none;">
-      <div class="field"><label>Vehículo relacionado (opcional)</label>
-        <select id="tx-vehiculo">
-          <option value="">— Ninguno —</option>
-          ${Store.get(KEYS.VEH,[]).map(v=>`<option value="${v.id}" ${existing&&existing.vehiculoId===v.id?'selected':''}>${v.name}</option>`).join('')}
-        </select>
-      </div>
-      <div id="tx-subtipo-wrap"></div>
-    </div>
+    <div id="tx-vehiculo-wrap"></div>
+    <div id="tx-subtipo-wrap"></div>
     <div id="tx-subtipo-comida-wrap"></div>
+    <div class="chips" style="margin-bottom:14px;">
+      <button type="button" class="chip" id="tx-recurrente-chip">🔁 Recurrente</button>
+      <button type="button" class="chip" id="tx-deducible-chip" style="display:none;">🧾 Deducible (autónomo)</button>
+    </div>
+    ${photoFieldHTML('tx-photo')}
     <div class="actions"><button class="btn btn-primary" id="tx-save">Guardar</button></div>
     ${existing?`<div style="text-align:center;"><button class="btn-danger" id="tx-delete">Eliminar movimiento</button></div>`:''}
   `;
+  if(existing && existing.photo){
+    document.getElementById('tx-photo-wrap').innerHTML =
+      `<img class="photo-preview" src="${existing.photo}"><label class="photo-btn" id="tx-photo-btn" style="flex:1;">📷 Cambiar foto</label><input type="file" accept="image/*" id="tx-photo-file" style="display:none;">`;
+    document.getElementById('tx-photo-btn').addEventListener('click', ()=>document.getElementById('tx-photo-file').click());
+  }
+  const getPhoto = wirePhotoField('tx-photo', ()=>{});
+
+  document.getElementById('tx-recurrente-chip').classList.toggle('active', recurrente);
+  document.getElementById('tx-recurrente-chip').addEventListener('click', ()=>{
+    recurrente = !recurrente;
+    document.getElementById('tx-recurrente-chip').classList.toggle('active', recurrente);
+  });
+  function renderDeducibleChip(){
+    const btn = document.getElementById('tx-deducible-chip');
+    btn.style.display = type==='expense' ? '' : 'none';
+    if(type!=='expense') deducible = false;
+    btn.classList.toggle('active', deducible);
+  }
+  document.getElementById('tx-deducible-chip').addEventListener('click', ()=>{
+    deducible = !deducible;
+    renderDeducibleChip();
+  });
+
   let subtipoVehiculo = existing ? (existing.subtipoVehiculo||null) : null;
   const SUBTIPOS_VEHICULO = [
     {k:'combustible', label:'Combustible', ic:'⛽'},
@@ -2371,8 +2356,7 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
   ];
   function renderSubtipoVehiculo(){
     const wrap = document.getElementById('tx-subtipo-wrap');
-    const vehSel = document.getElementById('tx-vehiculo').value;
-    if(type==='expense' && cat==='vehiculo' && vehSel){
+    if(type==='expense' && cat==='vehiculo' && vehiculoIdSel){
       if(!subtipoVehiculo) subtipoVehiculo = 'combustible';
       wrap.innerHTML = `<div class="field"><label>Tipo de gasto</label><div class="chips" id="tx-subtipo-chips">
         ${SUBTIPOS_VEHICULO.map(s=>`<button class="chip ${s.k===subtipoVehiculo?'active':''}" data-k="${s.k}">${s.ic} ${s.label}</button>`).join('')}
@@ -2383,17 +2367,22 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
       subtipoVehiculo = null;
     }
   }
-  // Control de visibilidad del bloque de vehículo
-  function toggleVehiculoWrap(){
-    const wrap = document.getElementById('tx-vehiculo-wrap');
+  function renderVehiculoField(){
+    const vwrap = document.getElementById('tx-vehiculo-wrap');
     if(type==='expense' && cat==='vehiculo'){
-      wrap.style.display = 'block';
-      renderSubtipoVehiculo();
+      vwrap.innerHTML = `<div class="field"><label>Vehículo relacionado</label>
+        <select id="tx-vehiculo">
+          <option value="">— Ninguno —</option>
+          ${Store.get(KEYS.VEH,[]).map(v=>`<option value="${v.id}" ${vehiculoIdSel===v.id?'selected':''}>${v.name}</option>`).join('')}
+        </select></div>`;
+      document.getElementById('tx-vehiculo').addEventListener('change', e=>{ vehiculoIdSel = e.target.value || null; renderSubtipoVehiculo(); });
     } else {
-      wrap.style.display = 'none';
+      vwrap.innerHTML = '';
+      vehiculoIdSel = null;
     }
+    renderSubtipoVehiculo();
   }
-  document.getElementById('tx-vehiculo').addEventListener('change', renderSubtipoVehiculo);
+
   let subtipoComida = existing ? (existing.subtipoComida||null) : null;
   const SUBTIPOS_COMIDA = [
     {k:'supermercado', label:'Supermercado', ic:'🛒'},
@@ -2417,89 +2406,42 @@ function openTxSheet(presetType, presetAmount, presetNote, txId){
     const list = type==='expense'?catList('expense'):catList('income');
     if(!cat || !list.find(c=>c.k===cat)) cat = list[0].k;
     document.getElementById('tx-cats').innerHTML = list.map(c=>`<button class="chip ${c.k===cat?'active':''}" data-k="${c.k}">${c.ic} ${c.label}</button>`).join('');
-    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); toggleVehiculoWrap(); renderSubtipoVehiculo(); renderSubtipoComida(); }));
+    document.querySelectorAll('#tx-cats .chip').forEach(ch=>ch.addEventListener('click', ()=>{ cat=ch.dataset.k; renderCats(); renderVehiculoField(); renderSubtipoComida(); }));
   }
   renderCats();
-  toggleVehiculoWrap();
+  renderVehiculoField();
   renderSubtipoComida();
-  // Recoger foto
-  const getPhoto = () => {
-    const preview = document.querySelector('#tx-photo-wrap .photo-preview');
-    return preview ? preview.src : null;
-  };
+  renderDeducibleChip();
   document.querySelectorAll('#type-seg button').forEach(b=>b.addEventListener('click', ()=>{
-    type=b.dataset.t; document.querySelectorAll('#type-seg button').forEach(x=>x.classList.toggle('active',x===b));
-    // Mostrar/ocultar campos de deducible y foto según tipo
-    const dedWrap = document.querySelector('.check-row:has(#tx-deducible)')?.parentNode;
-    const fotoWrap = document.getElementById('tx-photo-wrap')?.closest('.field');
-    if(type==='expense'){
-      if(dedWrap) dedWrap.style.display = '';
-      if(fotoWrap) fotoWrap.style.display = '';
-    } else {
-      if(dedWrap) dedWrap.style.display = 'none';
-      if(fotoWrap) fotoWrap.style.display = 'none';
-    }
-    renderCats(); toggleVehiculoWrap(); renderSubtipoVehiculo(); renderSubtipoComida();
+    type=b.dataset.t; document.querySelectorAll('#type-seg button').forEach(x=>x.classList.toggle('active',x===b)); renderCats(); renderVehiculoField(); renderSubtipoComida(); renderDeducibleChip();
   }));
-  // Inicializar visibilidad
-  if(type!=='expense'){
-    const dedWrap = document.querySelector('.check-row:has(#tx-deducible)')?.parentNode;
-    const fotoWrap = document.getElementById('tx-photo-wrap')?.closest('.field');
-    if(dedWrap) dedWrap.style.display = 'none';
-    if(fotoWrap) fotoWrap.style.display = 'none';
-  }
   document.getElementById('tx-save').addEventListener('click', ()=>{
     const amt = parseFloat(document.getElementById('tx-amount').value);
     if(!amt || amt<=0){ document.getElementById('tx-amount').focus(); return; }
     const tx = Store.get(KEYS.TX,[]);
     const note = document.getElementById('tx-note').value.trim();
-    const recurrente = document.getElementById('tx-recurrente').checked;
-    const vehiculoId = document.getElementById('tx-vehiculo')?.value || null;
-    const deducibleChecked = document.getElementById('tx-deducible')?.checked || false;
-    const photo = getPhoto();
-    // Si es gasto y deducible, crear/actualizar gasto en KEYS.GASTOS_AU
-    let gastoAuId = existing ? existing.gastoAuId : null;
-    if(type==='expense' && deducibleChecked){
-      const gastos = Store.get(KEYS.GASTOS_AU,[]);
-      if(gastoAuId){
-        const idx = gastos.findIndex(g=>g.id===gastoAuId);
-        if(idx>-1){
-          gastos[idx] = {...gastos[idx], descripcion:note || catInfo(cat).label, importe:amt, photo:photo || gastos[idx].photo};
-        }
-      } else {
-        const nuevoGasto = { id:uid(), date:todayISO(), descripcion:note || catInfo(cat).label, importe:amt, photo:photo || null };
-        gastos.push(nuevoGasto);
-        gastoAuId = nuevoGasto.id;
-      }
-      Store.set(KEYS.GASTOS_AU, gastos);
-    } else if(type==='expense' && !deducibleChecked && gastoAuId){
-      // Si se desmarcó deducible, eliminar el gasto asociado
-      Store.set(KEYS.GASTOS_AU, Store.get(KEYS.GASTOS_AU,[]).filter(g=>g.id!==gastoAuId));
-      gastoAuId = null;
-    }
+    const nuevaFoto = getPhoto();
     if(existing){
       const idx = tx.findIndex(x=>x.id===existing.id);
-      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, subtipoComida, deducible:deducibleChecked, gastoAuId, photo:photo || existing.photo};
+      tx[idx] = {...tx[idx], type, amount:amt, category:cat, note, recurrente, deducible, vehiculoId:vehiculoIdSel, subtipoVehiculo, subtipoComida, photo: nuevaFoto || existing.photo || null};
     } else {
-      tx.push({id:uid(), type, amount:amt, category:cat, note, recurrente, vehiculoId, subtipoVehiculo, subtipoComida, deducible:deducibleChecked, gastoAuId, photo:photo || null, date:todayISO()});
+      tx.push({id:uid(), type, amount:amt, category:cat, note, recurrente, deducible, vehiculoId:vehiculoIdSel, subtipoVehiculo, subtipoComida, photo: nuevaFoto || null, date:todayISO()});
     }
     Store.set(KEYS.TX, tx);
     closeSheet();
     if(currentView==='inicio') renderInicio();
     if(currentView==='finanzas') renderFinanzas();
+    if(currentView==='autonomo') renderAutonomo();
     renderHeader();
   });
   if(existing){
     document.getElementById('tx-delete').addEventListener('click', ()=>{
       if(!confirm('¿Eliminar este movimiento? No se puede deshacer.')) return;
-      // Si tenía gasto asociado, eliminarlo
-      if(existing.gastoAuId){
-        Store.set(KEYS.GASTOS_AU, Store.get(KEYS.GASTOS_AU,[]).filter(g=>g.id!==existing.gastoAuId));
-      }
       Store.set(KEYS.TX, Store.get(KEYS.TX,[]).filter(x=>x.id!==existing.id));
       closeSheet();
       if(currentView==='inicio') renderInicio();
       if(currentView==='finanzas') renderFinanzas();
+      if(currentView==='autonomo') renderAutonomo();
       renderHeader();
     });
   }
@@ -2544,11 +2486,16 @@ function openFuelSheet(vehId){
     <div class="handle"></div><h3>Repostaje — ${v.name}</h3>
     <div class="field"><label>Kilometraje actual</label><input type="number" inputmode="numeric" id="fu-km" value="${v.km||''}" placeholder="Ej. 24700"></div>
     <div class="field"><label>Litros</label><input type="number" inputmode="decimal" id="fu-litros" placeholder="Ej. 38,5"></div>
-    <div class="check-row"><input type="checkbox" id="fu-lleno" checked><label for="fu-lleno">Depósito lleno</label></div>
+    <button type="button" class="chip active" id="fu-lleno-chip" style="margin-bottom:14px;">⛽ Depósito lleno</button>
     <p style="font-size:12px;color:var(--text-dim);margin:4px 0 0;">Marca esto solo si has llenado el depósito del todo — así calculamos el consumo real entre repostajes.</p>
     ${photoFieldHTML('fu-photo')}
     <div class="actions"><button class="btn btn-primary" id="fu-save">Guardar</button></div>
   `;
+  let lleno = true;
+  document.getElementById('fu-lleno-chip').addEventListener('click', ()=>{
+    lleno = !lleno;
+    document.getElementById('fu-lleno-chip').classList.toggle('active', lleno);
+  });
   const getPhoto = wirePhotoField('fu-photo', ()=>{});
   document.getElementById('fu-save').addEventListener('click', ()=>{
     const km = parseInt(document.getElementById('fu-km').value,10);
@@ -2556,7 +2503,7 @@ function openFuelSheet(vehId){
     if(!km || km<=0){ document.getElementById('fu-km').focus(); return; }
     if(!litros || litros<=0){ document.getElementById('fu-litros').focus(); return; }
     const fuels = Store.get(KEYS.FUEL,[]);
-    fuels.push({id:uid(), vehicleId:vehId, km, litros, lleno:document.getElementById('fu-lleno').checked, date:todayISO(), photo:getPhoto()});
+    fuels.push({id:uid(), vehicleId:vehId, km, litros, lleno, date:todayISO(), photo:getPhoto()});
     Store.set(KEYS.FUEL, fuels);
     const vehs = Store.get(KEYS.VEH,[]);
     const idx = vehs.findIndex(x=>x.id===vehId);

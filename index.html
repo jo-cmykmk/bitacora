@@ -377,7 +377,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.21';
+const APP_VERSION = '2026-08-01.23';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -919,9 +919,11 @@ function renderAutonomo(){
   const shownClientes = showAllClientes ? clientes : clientes.slice(0,5);
   document.getElementById('au-clientes-toggle').textContent = showAllClientes ? '← Ver menos' : 'Ver todos →';
   document.getElementById('au-clientes-list').innerHTML = shownClientes.length ? shownClientes.map(c=>`
-    <div class="row"><div class="ico" style="background:var(--blue-soft);color:var(--blue);">🧑</div>
-      <div class="meta"><div class="t1">${c.nombre}</div><div class="t2">${c.nif}</div></div></div>
+    <div class="row" data-cli="${c.id}" style="cursor:pointer;"><div class="ico" style="background:var(--blue-soft);color:var(--blue);">🧑</div>
+      <div class="meta"><div class="t1">${c.nombre}</div><div class="t2">${c.nif}</div></div>
+      <div class="chev">›</div></div>
   `).join('') : `<div class="empty"><span class="icn">🧑‍💼</span><div class="t">Sin clientes</div></div>`;
+  document.querySelectorAll('#au-clientes-list [data-cli]').forEach(r=>r.addEventListener('click', ()=>openEditClienteSheet(r.dataset.cli)));
 
   const ingresos = Store.get(KEYS.INGRESOS_AU,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
   let showAllIng = auShowAllIngresos;
@@ -1007,6 +1009,39 @@ document.getElementById('au-clientes-toggle').addEventListener('click', ()=>{ au
 document.getElementById('au-ingresos-toggle').addEventListener('click', ()=>{ auShowAllIngresos = !auShowAllIngresos; renderAutonomo(); });
 document.getElementById('au-add-cliente-btn').addEventListener('click', ()=>openAddClienteSheet());
 
+function openEditClienteSheet(cliId){
+  const clientes = Store.get(KEYS.CLIENTES,[]);
+  const c = clientes.find(x=>x.id===cliId);
+  if(!c) return;
+  const nIngresos = Store.get(KEYS.INGRESOS_AU,[]).filter(i=>i.clienteId===cliId).length;
+  sheetEl.innerHTML = `
+    <div class="handle"></div><h3>Editar cliente</h3>
+    <div class="field"><label>Nombre</label><input type="text" id="cl-nombre" value="${c.nombre}"></div>
+    <div class="field"><label>NIF</label><input type="text" id="cl-nif" value="${c.nif}"></div>
+    ${nIngresos?`<p style="font-size:12px;color:var(--text-dim);margin:-8px 0 14px;">Tiene ${nIngresos} ingreso${nIngresos===1?'':'s'} registrado${nIngresos===1?'':'s'} a su nombre.</p>`:''}
+    <div class="actions"><button class="btn btn-primary" id="cl-save">Guardar cambios</button></div>
+    <div style="text-align:center;"><button class="btn-danger" id="cl-delete">Eliminar cliente</button></div>
+  `;
+  document.getElementById('cl-save').addEventListener('click', ()=>{
+    const nombre = document.getElementById('cl-nombre').value.trim();
+    if(!nombre){ document.getElementById('cl-nombre').focus(); return; }
+    const idx = clientes.findIndex(x=>x.id===cliId);
+    clientes[idx] = {...clientes[idx], nombre, nif: document.getElementById('cl-nif').value.trim()};
+    Store.set(KEYS.CLIENTES, clientes);
+    closeSheet();
+    renderAutonomo();
+  });
+  document.getElementById('cl-delete').addEventListener('click', ()=>{
+    const aviso = nIngresos
+      ? `Este cliente tiene ${nIngresos} ingreso${nIngresos===1?'':'s'} registrado${nIngresos===1?'':'s'}. Si lo eliminas, esos ingresos se quedan sin cliente asociado (no se borran). ¿Seguro?`
+      : '¿Eliminar este cliente?';
+    if(!confirm(aviso)) return;
+    Store.set(KEYS.CLIENTES, Store.get(KEYS.CLIENTES,[]).filter(x=>x.id!==cliId));
+    closeSheet();
+    renderAutonomo();
+  });
+  overlay.classList.add('show');
+}
 function openAddClienteSheet(onDone){
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>Nuevo cliente</h3>

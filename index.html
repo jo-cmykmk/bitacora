@@ -377,7 +377,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.24';
+const APP_VERSION = '2026-08-01.26';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -650,16 +650,31 @@ function openGastosVehiculoDetalle(vehId, clave){
   overlay.classList.add('show');
 }
 
+function mesesDesde(fechaStr){
+  const d = new Date(fechaStr), hoy = new Date();
+  let meses = (hoy.getFullYear()-d.getFullYear())*12 + (hoy.getMonth()-d.getMonth());
+  if(hoy.getDate() < d.getDate()) meses -= 1;
+  return Math.max(0, meses);
+}
 function getVehicleWarnings(v, logs){
   const alerts = v.alerts || {};
   const warnings = [];
-  Object.entries(alerts).forEach(([tipo, threshold])=>{
-    if(!threshold || threshold<=0) return;
+  Object.entries(alerts).forEach(([tipo, cfg])=>{
+    // Compatible con el formato antiguo (solo un número = km) y el nuevo ({km, meses}).
+    const kmThreshold = typeof cfg === 'number' ? cfg : (cfg && cfg.km) || null;
+    const mesesThreshold = (cfg && typeof cfg === 'object') ? (cfg.meses || null) : null;
+    if(!kmThreshold && !mesesThreshold) return;
     const last = logs.filter(l=>l.vehicleId===v.id && l.tipo===tipo).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
     const kmSince = last ? (v.km - last.km) : v.km;
-    if(kmSince>=threshold){
+    const mesesSince = last ? mesesDesde(last.date) : null;
+    const kmCumplido = kmThreshold && kmSince>=kmThreshold;
+    const mesesCumplido = mesesThreshold && mesesSince!==null && mesesSince>=mesesThreshold;
+    if(kmCumplido || mesesCumplido){
       const label = logInfo(tipo).label;
-      warnings.push({label, corto:label, mensaje:`Toca revisar ${label.toLowerCase()} — van ${kmSince.toLocaleString('es-ES')} km (alerta cada ${threshold.toLocaleString('es-ES')} km).`});
+      const partes = [];
+      if(kmThreshold) partes.push(`${kmSince.toLocaleString('es-ES')} km (cada ${kmThreshold.toLocaleString('es-ES')} km)`);
+      if(mesesThreshold && mesesSince!==null) partes.push(`${mesesSince} meses (cada ${mesesThreshold} meses)`);
+      warnings.push({label, corto:label, mensaje:`Toca revisar ${label.toLowerCase()} — van ${partes.join(' / ')}.`});
     }
   });
   const hoy = new Date();
@@ -2294,25 +2309,39 @@ function openAlertsSheet(vehId){
   const alerts = v.alerts || {};
   sheetEl.innerHTML = `
     <div class="handle"></div><h3>Alertas de ${v.name}</h3>
-    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 16px;line-height:1.4;">Pon cada cuántos kilómetros quieres que te avise desde el último registro de ese tipo. Déjalo vacío para desactivar.</p>
-    ${LOG_TYPES.map(l=>`
-      <div class="field">
-        <label>${l.ic} ${l.label} — avisar cada (km)</label>
-        <input type="number" inputmode="numeric" id="al-${l.k}" placeholder="Ej. 10000" value="${alerts[l.k]||''}">
-      </div>`).join('')}
+    <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 16px;line-height:1.4;">Pon cada cuántos kilómetros y/o cada cuántos meses quieres que te avise desde el último registro de ese tipo. Si pones los dos, avisa con el que se cumpla antes. Déjalo vacío para desactivar.</p>
+    ${LOG_TYPES.map(l=>{
+      const cfg = alerts[l.k];
+      const kmVal = typeof cfg === 'number' ? cfg : (cfg && cfg.km) || '';
+      const mesesVal = (cfg && typeof cfg === 'object') ? (cfg.meses || '') : '';
+      return `<div class="field"><label>${l.ic} ${l.label}</label>
+        <div style="display:flex;gap:8px;">
+          <input type="number" inputmode="numeric" id="al-${l.k}-km" placeholder="cada X km" value="${kmVal}" style="flex:1;">
+          <input type="number" inputmode="numeric" id="al-${l.k}-meses" placeholder="cada Y meses" value="${mesesVal}" style="flex:1;">
+        </div>
+      </div>`;
+    }).join('')}
     <div class="actions"><button class="btn btn-primary" id="al-save">Guardar alertas</button></div>
+    ${v.itvFecha ? `
+      <div class="section-head" style="margin-top:22px;"><h2>ITV</h2></div>
+      <div class="card pad" style="margin-bottom:10px;">
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:8px;">Próxima ITV: <b style="color:var(--ink);">${fmtDate(v.itvFecha)}</b></div>
+        <button class="btn btn-outline" id="al-itv-pasada" style="width:100%;">✅ Marcar ITV como pasada</button>
+      </div>` : ''}
   `;
   document.getElementById('al-save').addEventListener('click', ()=>{
     const idx = vehs.findIndex(x=>x.id===vehId);
     const newAlerts = {};
     LOG_TYPES.forEach(l=>{
-      const val = parseInt(document.getElementById('al-'+l.k).value,10);
-      if(val>0) newAlerts[l.k] = val;
+      const km = parseInt(document.getElementById('al-'+l.k+'-km').value,10);
+      const meses = parseInt(document.getElementById('al-'+l.k+'-meses').value,10);
+      if(km>0 || meses>0) newAlerts[l.k] = {km: km>0?km:null, meses: meses>0?meses:null};
     });
     vehs[idx].alerts = newAlerts;
     Store.set(KEYS.VEH, vehs);
     closeSheet(); openVehicleDetail(vehId);
   });
+  if(v.itvFecha) document.getElementById('al-itv-pasada').addEventListener('click', ()=>openMarcarItvPasada(vehId));
   overlay.classList.add('show');
 }
 
@@ -2335,7 +2364,6 @@ function openVehicleDetail(vehId){
       ${avg ? `<div class="pill-center"><div class="pill">Consumo medio: ${avg.toFixed(1)} L/100km</div></div>` : ''}
     </div>
     ${getVehicleWarnings(v, Store.get(KEYS.LOGS,[])).map(w=>`<div class="card pad" style="background:var(--orange-soft);margin-bottom:10px;font-size:14px;">⚠️ ${w.mensaje}</div>`).join('')}
-    ${v.itvFecha ? `<button class="btn btn-outline" id="veh-itv-pasada" style="margin-bottom:14px;width:100%;">✅ Marcar ITV como pasada</button>` : ''}
     <div class="btn-row">
       <button class="btn btn-secondary" id="add-fuel">⛽ Repostaje</button>
       <button class="btn btn-primary" id="add-log">🔧 Mantenimiento</button>
@@ -2357,26 +2385,39 @@ function openVehicleDetail(vehId){
     </div>
 
     <div class="section-head"><h2>Mantenimiento</h2></div>
-    <div class="card" id="veh-log-list">
-      ${logs.length ? logs.map(l=>{
-        const info = logInfo(l.tipo);
-        return `<div class="row">
-          <div class="ico" style="background:var(--green-soft);">${info.ic}</div>
-          <div class="meta"><div class="t1">${info.label}</div>
-            <div class="t2">${fmtDate(l.date)} · ${l.km.toLocaleString('es-ES')} km${l.notas? ' · '+l.notas:''}</div></div>
-          ${l.photo?`<img class="thumb" src="${l.photo}" data-src="${l.photo}">`:''}
-        </div>`;
-      }).join('') : `<div class="empty"><span class="icn">🔧</span><div class="t">Sin registros todavía</div></div>`}
-    </div>
+    <div class="chips" id="veh-log-filtros" style="margin-bottom:10px;"></div>
+    <div class="card" id="veh-log-list"></div>
   `;
+  renderLogList(vehId);
   wrap.querySelectorAll('.thumb').forEach(img=>img.addEventListener('click', ()=>openLightbox(img.dataset.src)));
   document.getElementById('veh-back').addEventListener('click', renderVehiculosList);
   document.getElementById('veh-edit').addEventListener('click', ()=>openEditVehicleSheet(vehId));
   document.getElementById('veh-alerts').addEventListener('click', ()=>openAlertsSheet(vehId));
   document.getElementById('add-log').addEventListener('click', ()=>openLogSheet(vehId));
   document.getElementById('add-fuel').addEventListener('click', ()=>openFuelSheet(vehId));
-  if(document.getElementById('veh-itv-pasada')) document.getElementById('veh-itv-pasada').addEventListener('click', ()=>openMarcarItvPasada(vehId));
   renderGastoVehiculo(vehId);
+}
+let vehLogFiltro = 'todos';
+function renderLogList(vehId){
+  const logs = Store.get(KEYS.LOGS,[]).filter(l=>l.vehicleId===vehId).reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const tiposPresentes = LOG_TYPES.filter(l=>logs.some(log=>log.tipo===l.k));
+  if(!tiposPresentes.some(l=>l.k===vehLogFiltro)) vehLogFiltro = 'todos';
+  const filtrosEl = document.getElementById('veh-log-filtros');
+  filtrosEl.innerHTML = `<button class="chip ${vehLogFiltro==='todos'?'active':''}" data-filtro="todos">Todos</button>`
+    + tiposPresentes.map(l=>`<button class="chip ${vehLogFiltro===l.k?'active':''}" data-filtro="${l.k}">${l.ic} ${l.label}</button>`).join('');
+  filtrosEl.querySelectorAll('.chip').forEach(ch=>ch.addEventListener('click', ()=>{ vehLogFiltro = ch.dataset.filtro; renderLogList(vehId); }));
+  const logsFiltrados = vehLogFiltro==='todos' ? logs : logs.filter(l=>l.tipo===vehLogFiltro);
+  const listEl = document.getElementById('veh-log-list');
+  listEl.innerHTML = logsFiltrados.length ? logsFiltrados.map(l=>{
+    const info = logInfo(l.tipo);
+    return `<div class="row">
+      <div class="ico" style="background:var(--green-soft);">${info.ic}</div>
+      <div class="meta"><div class="t1">${info.label}</div>
+        <div class="t2">${fmtDate(l.date)} · ${l.km.toLocaleString('es-ES')} km${l.notas? ' · '+l.notas:''}</div></div>
+      ${l.photo?`<img class="thumb" src="${l.photo}" data-src="${l.photo}">`:''}
+    </div>`;
+  }).join('') : `<div class="empty"><span class="icn">🔧</span><div class="t">Sin registros ${vehLogFiltro==='todos'?'todavía':'de este tipo'}</div></div>`;
+  listEl.querySelectorAll('.thumb').forEach(img=>img.addEventListener('click', ()=>openLightbox(img.dataset.src)));
 }
 
 /* ============ SHEET ENGINE ============ */

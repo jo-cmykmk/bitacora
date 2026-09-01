@@ -349,17 +349,11 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
     <!-- AUTONOMO -->
     <section class="view" id="view-autonomo">
-      <div id="au-hero-slot"></div>
-      <div class="section-head"><h2>Clientes</h2><a id="au-clientes-toggle">Ver todos →</a></div>
-      <div class="card" id="au-clientes-list"></div>
-      <button class="btn btn-outline" id="au-add-cliente-btn" style="margin-top:10px;margin-bottom:4px;">＋ Añadir cliente</button>
-
-      <div class="section-head"><h2>Ingresos</h2><a id="au-ingresos-toggle">Ver todos →</a></div>
-      <div class="card" id="au-ingresos-list"></div>
-
-      <div class="section-head"><h2>Gastos deducibles</h2><a id="au-gastos-toggle">Ver todos →</a></div>
-      <div class="card" id="au-gastos-list"></div>
-      <button class="btn btn-outline" id="au-add-gasto-btn" style="margin-top:10px;margin-bottom:4px;">＋ Nuevo gasto</button>
+      <div id="au-main-wrap">
+        <div id="au-hero-slot"></div>
+        <div class="card" id="au-menu"></div>
+      </div>
+      <div id="au-detail-wrap" style="display:none;"></div>
     </section>
   </main>
 
@@ -377,7 +371,7 @@ main{padding:0 16px calc(120px + var(--safe-bottom));}
 
 <script>
 /* ============ VERSIÓN ============ */
-const APP_VERSION = '2026-08-01.26';
+const APP_VERSION = '2026-08-01.29';
 
 /* ============ STORE (con sincronización a servidor) ============ */
 const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs', FUEL:'bitacora_fuel',
@@ -387,7 +381,8 @@ const KEYS = { TX:'bitacora_tx', VEH:'bitacora_vehiculos', LOGS:'bitacora_logs',
   CAT_EXPENSE_HIDDEN:'bitacora_cat_expense_hidden', CAT_INCOME_CUSTOM:'bitacora_cat_income_custom',
   CAT_INCOME_HIDDEN:'bitacora_cat_income_hidden', CAT_OVERRIDES:'bitacora_cat_overrides', CARTERA:'bitacora_cartera',
   FIN_MENU_ORDEN:'bitacora_fin_menu_orden', CARTERA_OBJETIVOS:'bitacora_cartera_objetivos',
-  AUTONOMO_COSTES_FIJOS:'bitacora_autonomo_costes_fijos', AUTONOMO_RESERVA_PCT:'bitacora_autonomo_reserva_pct' };
+  AUTONOMO_COSTES_FIJOS:'bitacora_autonomo_costes_fijos', AUTONOMO_RESERVA_PCT:'bitacora_autonomo_reserva_pct',
+  SESION_CLIENTES:'bitacora_sesion_clientes', SESIONES:'bitacora_sesiones' };
 
 // Estas claves son ajustes de ESTE dispositivo (a qué servidor hablar) — nunca se sincronizan.
 const LOCAL_ONLY_KEYS = new Set([KEYS.SERVER_URL, KEYS.SERVER_KEY]);
@@ -515,6 +510,8 @@ function seedIfEmpty(){
   if(Store.get(KEYS.CARTERA_OBJETIVOS,null)===null) Store.set(KEYS.CARTERA_OBJETIVOS, Object.fromEntries(CARTERA_GRUPOS.map(g=>[g.k,g.objetivo])));
   if(Store.get(KEYS.AUTONOMO_COSTES_FIJOS,null)===null) Store.set(KEYS.AUTONOMO_COSTES_FIJOS, [{id:uid(), nombre:'Cuota de autónomo + alquiler espacio', importe:370}]);
   if(Store.get(KEYS.AUTONOMO_RESERVA_PCT,null)===null) Store.set(KEYS.AUTONOMO_RESERVA_PCT, 20);
+  if(Store.get(KEYS.SESION_CLIENTES,null)===null) Store.set(KEYS.SESION_CLIENTES, []);
+  if(Store.get(KEYS.SESIONES,null)===null) Store.set(KEYS.SESIONES, []);
 }
 
 /* ============ CATEGORIES ============ */
@@ -925,7 +922,257 @@ function openEditarCostesFijos(){
   });
   overlay.classList.add('show');
 }
-function renderAutonomo(){
+/* ============ SESIONES RECURRENTES ============ */
+const FRECUENCIAS = [
+  {k:'semanal', label:'Semanal'}, {k:'quincenal', label:'Quincenal'}, {k:'mensual', label:'Mensual'},
+];
+const ESPACIOS = [
+  {k:'Neuronat', label:'Neuronat', ic:'🏢'}, {k:'Jaime III', label:'Jaime III', ic:'🏠'},
+];
+function frecLabel(k){ return (FRECUENCIAS.find(f=>f.k===k)||{}).label || k; }
+
+function renderSesionClientes(){
+  const el = document.getElementById('au-sesion-clientes-list');
+  if(!el) return;
+  const lista = Store.get(KEYS.SESION_CLIENTES,[]).filter(sc=>!sc.fechaBaja);
+  el.innerHTML = lista.length ? lista.map(sc=>{
+    const cli = clienteObj(sc.clienteId);
+    const esp = ESPACIOS.find(e=>e.k===sc.espacio) || {ic:'📍'};
+    return `<div class="row" data-sc="${sc.id}" style="cursor:pointer;"><div class="ico" style="background:var(--blue-soft);">${esp.ic}</div>
+      <div class="meta"><div class="t1">${cli.nombre}</div><div class="t2">${sc.hora} · ${frecLabel(sc.frecuencia)} · ${sc.espacio}</div></div>
+      <div class="side"><div class="amt num">${fmtEUR(sc.tarifa)}</div></div>
+      <div class="chev">›</div></div>`;
+  }).join('') : `<div class="empty"><span class="icn">📅</span><div class="t">Sin sesiones recurrentes</div><div class="d">Añade un cliente habitual para agilizar el registro</div></div>`;
+  el.querySelectorAll('[data-sc]').forEach(r=>r.addEventListener('click', ()=>openSesionClienteSheet(r.dataset.sc)));
+}
+
+function openSesionClienteSheet(scId){
+  const existing = scId ? Store.get(KEYS.SESION_CLIENTES,[]).find(x=>x.id===scId) : null;
+  let clienteId = existing ? existing.clienteId : null;
+  let frecuencia = existing ? existing.frecuencia : 'semanal';
+  let espacio = existing ? existing.espacio : 'Neuronat';
+  let repartoLaura = existing ? (existing.repartoLauraPct!=null) : false;
+  const render = ()=>{
+    const clientes = Store.get(KEYS.CLIENTES,[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    if(!clienteId && clientes.length) clienteId = clientes[0].id;
+    sheetEl.innerHTML = `
+      <div class="handle"></div><h3>${existing?'Editar sesión recurrente':'Nueva sesión recurrente'}</h3>
+      <div class="field"><label>Cliente</label>
+        <select id="sc-cliente">${clientes.map(c=>`<option value="${c.id}" ${c.id===clienteId?'selected':''}>${c.nombre}</option>`).join('')}</select>
+      </div>
+      <button class="btn btn-outline" id="sc-nuevo-cliente" style="margin:-6px 0 14px;">＋ Nuevo cliente</button>
+      <div class="field"><label>Hora habitual</label><input type="time" id="sc-hora" value="${existing?existing.hora:'17:00'}"></div>
+      <div class="field"><label>Frecuencia</label><div class="chips" id="sc-frec-chips">${FRECUENCIAS.map(f=>`<button class="chip ${f.k===frecuencia?'active':''}" data-k="${f.k}">${f.label}</button>`).join('')}</div></div>
+      <div class="field"><label>Duración (min)</label><input type="number" inputmode="numeric" id="sc-duracion" value="${existing?existing.duracionMin:50}"></div>
+      <div class="field"><label>Tarifa por sesión</label><input type="number" inputmode="decimal" class="amount" id="sc-tarifa" value="${existing?existing.tarifa:''}" placeholder="0,00"></div>
+      <div class="field"><label>Modalidad</label><input type="text" id="sc-modalidad" placeholder="Ej. Presencial, online..." value="${existing?(existing.modalidad||''):''}"></div>
+      <div class="field"><label>Espacio</label><div class="chips" id="sc-espacio-chips">${ESPACIOS.map(e=>`<button class="chip ${e.k===espacio?'active':''}" data-k="${e.k}">${e.ic} ${e.label}</button>`).join('')}</div></div>
+      <div class="field"><label>Fecha de inicio</label><input type="date" id="sc-fecha-inicio" value="${existing?existing.fechaInicio:todayISO()}"></div>
+      <button type="button" class="chip" id="sc-reparto-chip" style="margin-bottom:10px;">🤝 Se reparte con Laura por defecto</button>
+      <div id="sc-reparto-wrap"></div>
+      <div class="field"><label>Notas (opcional)</label><input type="text" id="sc-notas" value="${existing?(existing.notas||''):''}"></div>
+      <div class="actions"><button class="btn btn-primary" id="sc-save">Guardar</button></div>
+      ${existing?`<div style="text-align:center;"><button class="btn-danger" id="sc-baja">Dar de baja esta sesión recurrente</button></div>`:''}
+    `;
+    document.getElementById('sc-cliente').addEventListener('change', e=>{ clienteId = e.target.value; });
+    document.getElementById('sc-nuevo-cliente').addEventListener('click', ()=>{
+      openAddClienteSheet(nuevo=>{ clienteId = nuevo.id; render(); });
+    });
+    document.querySelectorAll('#sc-frec-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+      frecuencia = ch.dataset.k;
+      document.querySelectorAll('#sc-frec-chips .chip').forEach(c=>c.classList.toggle('active', c===ch));
+    }));
+    document.querySelectorAll('#sc-espacio-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+      espacio = ch.dataset.k;
+      document.querySelectorAll('#sc-espacio-chips .chip').forEach(c=>c.classList.toggle('active', c===ch));
+    }));
+    function renderReparto(){
+      document.getElementById('sc-reparto-chip').classList.toggle('active', repartoLaura);
+      document.getElementById('sc-reparto-wrap').innerHTML = repartoLaura
+        ? `<div class="field"><label>% para Laura</label><input type="number" inputmode="numeric" id="sc-reparto-pct" value="${existing&&existing.repartoLauraPct!=null?existing.repartoLauraPct:30}"></div>` : '';
+    }
+    document.getElementById('sc-reparto-chip').addEventListener('click', ()=>{ repartoLaura = !repartoLaura; renderReparto(); });
+    renderReparto();
+    document.getElementById('sc-save').addEventListener('click', ()=>{
+      const tarifa = parseFloat(document.getElementById('sc-tarifa').value);
+      if(!tarifa || tarifa<=0){ document.getElementById('sc-tarifa').focus(); return; }
+      const lista = Store.get(KEYS.SESION_CLIENTES,[]);
+      const datos = {
+        clienteId, hora: document.getElementById('sc-hora').value, frecuencia,
+        duracionMin: parseInt(document.getElementById('sc-duracion').value,10)||50,
+        tarifa, modalidad: document.getElementById('sc-modalidad').value.trim(), espacio,
+        fechaInicio: document.getElementById('sc-fecha-inicio').value || todayISO(),
+        repartoLauraPct: repartoLaura ? (parseInt(document.getElementById('sc-reparto-pct').value,10)||30) : null,
+        notas: document.getElementById('sc-notas').value.trim(),
+      };
+      if(existing){
+        const idx = lista.findIndex(x=>x.id===existing.id);
+        lista[idx] = {...lista[idx], ...datos};
+      } else {
+        lista.push({id:uid(), fechaBaja:null, ...datos});
+      }
+      Store.set(KEYS.SESION_CLIENTES, lista);
+      closeSheet();
+      renderAutonomo();
+    });
+    if(existing){
+      document.getElementById('sc-baja').addEventListener('click', ()=>{
+        if(!confirm('¿Dar de baja esta sesión recurrente? No se borra el historial de sesiones ya registradas.')) return;
+        const lista = Store.get(KEYS.SESION_CLIENTES,[]);
+        const idx = lista.findIndex(x=>x.id===existing.id);
+        lista[idx].fechaBaja = todayISO();
+        Store.set(KEYS.SESION_CLIENTES, lista);
+        closeSheet();
+        renderAutonomo();
+      });
+    }
+  };
+  render();
+  overlay.classList.add('show');
+}
+
+function renderSesionesList(){
+  const el = document.getElementById('au-sesiones-list');
+  if(!el) return;
+  const sesiones = Store.get(KEYS.SESIONES,[]).slice().reverse().sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+  const shown = auShowAllSesiones ? sesiones : sesiones.slice(0,6);
+  document.getElementById('au-sesiones-toggle').textContent = auShowAllSesiones ? '← Ver menos' : 'Ver todas →';
+  const ESTADOS = {pendiente:{ic:'⏳',label:'Pendiente de confirmar',color:'var(--yellow-soft)'}, realizada:{ic:'✅',label:'Realizada',color:'var(--green-soft)'}, cambiada:{ic:'🔁',label:'Cambiada',color:'var(--blue-soft)'}, cancelada:{ic:'❌',label:'Cancelada',color:'var(--orange-soft)'}};
+  el.innerHTML = sesiones.length ? shown.map(s=>{
+    const sc = Store.get(KEYS.SESION_CLIENTES,[]).find(x=>x.id===s.clienteRecurrenteId);
+    const cli = sc ? clienteObj(sc.clienteId) : {nombre:'—'};
+    const est = ESTADOS[s.estado] || ESTADOS.pendiente;
+    return `<div class="row" data-ses="${s.id}" style="cursor:pointer;"><div class="ico" style="background:${est.color}">${est.ic}</div>
+      <div class="meta"><div class="t1">${cli.nombre}</div><div class="t2">${fmtDate(s.fecha)}${s.hora?' · '+s.hora:''} · ${est.label}${s.ingresoId?' · con ingreso':''}</div></div>
+      <div class="chev">›</div></div>`;
+  }).join('') : `<div class="empty"><span class="icn">📅</span><div class="t">Sin sesiones registradas</div></div>`;
+  el.querySelectorAll('[data-ses]').forEach(r=>r.addEventListener('click', ()=>openNuevaSesionSheet(r.dataset.ses)));
+}
+
+function openNuevaSesionSheet(sesionId){
+  const existing = sesionId ? Store.get(KEYS.SESIONES,[]).find(x=>x.id===sesionId) : null;
+  const sesionClientesActivos = Store.get(KEYS.SESION_CLIENTES,[]).filter(sc=>!sc.fechaBaja);
+  let scId = existing ? existing.clienteRecurrenteId : (sesionClientesActivos[0] ? sesionClientesActivos[0].id : null);
+
+  if(!scId && !existing){
+    alert('Primero necesitas añadir al menos una sesión recurrente (con su cliente y tarifa) para poder registrar sesiones.');
+    return;
+  }
+
+  const pasoInicial = ()=>{
+    const sc = Store.get(KEYS.SESION_CLIENTES,[]).find(x=>x.id===scId);
+    const cli = sc ? clienteObj(sc.clienteId) : {nombre:''};
+    sheetEl.innerHTML = `
+      <div class="handle"></div><h3>${existing?'Editar sesión':'Registrar sesión'}</h3>
+      ${!existing ? `<div class="field"><label>Sesión recurrente</label>
+        <select id="ns-sc">${sesionClientesActivos.map(x=>`<option value="${x.id}" ${x.id===scId?'selected':''}>${clienteObj(x.clienteId).nombre} · ${x.hora}</option>`).join('')}</select>
+      </div>` : `<p style="font-size:14px;margin:-6px 0 14px;"><b>${cli.nombre}</b></p>`}
+      <div class="field"><label>Fecha</label><input type="date" id="ns-fecha" value="${existing?existing.fecha:todayISO()}"></div>
+      <div class="field"><label>Hora</label><input type="time" id="ns-hora" value="${existing&&existing.hora?existing.hora:(sc?sc.hora:'17:00')}"></div>
+      <div class="field"><label>Estado</label><div class="chips" id="ns-estado-chips">
+        <button class="chip active" data-k="realizada">✅ Realizada</button>
+        <button class="chip" data-k="cambiada">🔁 Cambiada de hora/día</button>
+        <button class="chip" data-k="cancelada">❌ Cancelada</button>
+      </div></div>
+      <div class="actions"><button class="btn btn-primary" id="ns-siguiente">Siguiente</button></div>
+      ${existing?`<div style="text-align:center;"><button class="btn-danger" id="ns-delete">Eliminar sesión</button></div>`:''}
+    `;
+    let estado = existing ? (existing.estado==='pendiente'?'realizada':existing.estado) : 'realizada';
+    if(!existing) document.getElementById('ns-sc').addEventListener('change', e=>{ scId = e.target.value; });
+    document.querySelectorAll('#ns-estado-chips .chip').forEach(ch=>ch.addEventListener('click', ()=>{
+      estado = ch.dataset.k;
+      document.querySelectorAll('#ns-estado-chips .chip').forEach(c=>c.classList.toggle('active', c===ch));
+    }));
+    document.getElementById('ns-siguiente').addEventListener('click', ()=>{
+      const fecha = document.getElementById('ns-fecha').value || todayISO();
+      const hora = document.getElementById('ns-hora').value || (sc?sc.hora:'17:00');
+      if(estado==='cancelada'){
+        guardarSesion({scId, fecha, hora, estado:'cancelada', facturable:false, ingresoId: existing?existing.ingresoId:null});
+        return;
+      }
+      pasoFacturar(scId, fecha, hora, estado);
+    });
+    if(existing){
+      document.getElementById('ns-delete').addEventListener('click', ()=>{
+        if(!confirm('¿Eliminar esta sesión? No se borra ningún ingreso ya generado, solo el registro de la sesión.')) return;
+        Store.set(KEYS.SESIONES, Store.get(KEYS.SESIONES,[]).filter(x=>x.id!==existing.id));
+        closeSheet();
+        renderAutonomo();
+      });
+    }
+  };
+
+  const pasoFacturar = (scId, fecha, hora, estado)=>{
+    const sc = Store.get(KEYS.SESION_CLIENTES,[]).find(x=>x.id===scId);
+    const cli = clienteObj(sc.clienteId);
+    sheetEl.innerHTML = `
+      <div class="handle"></div><h3>¿Se registra ingreso?</h3>
+      <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">Sesión con ${cli.nombre} el ${fmtDate(fecha)}${hora?' a las '+hora:''}.</p>
+      <div class="actions" style="flex-direction:column;gap:10px;">
+        <button class="btn btn-primary" id="ns-ingreso-si">Sí, registrar ingreso</button>
+        <button class="btn btn-outline" id="ns-ingreso-no">No — solo marcar la sesión</button>
+      </div>
+    `;
+    document.getElementById('ns-ingreso-no').addEventListener('click', ()=>{
+      guardarSesion({scId, fecha, hora, estado, facturable:false, ingresoId: existing?existing.ingresoId:null});
+    });
+    document.getElementById('ns-ingreso-si').addEventListener('click', ()=> pasoDetalleIngreso(scId, fecha, hora, estado));
+  };
+
+  const pasoDetalleIngreso = (scId, fecha, hora, estado)=>{
+    const sc = Store.get(KEYS.SESION_CLIENTES,[]).find(x=>x.id===scId);
+    const cli = clienteObj(sc.clienteId);
+    let compartido = sc.repartoLauraPct != null;
+    let reqFactura = false;
+    sheetEl.innerHTML = `
+      <div class="handle"></div><h3>Detalle del ingreso</h3>
+      <p style="font-size:13px;color:var(--text-dim);margin:-8px 0 14px;">${cli.nombre} · ${fmtDate(fecha)}</p>
+      <div class="field"><label>Importe</label><input type="number" inputmode="decimal" class="amount" id="ns-importe" value="${sc.tarifa}"></div>
+      <div class="field"><label>Tipo</label><div class="chips">
+        <button type="button" class="chip ${compartido?'active':''}" id="ns-chip-compartido">🤝 Compartido con Laura</button>
+        <button type="button" class="chip" id="ns-chip-facturar">🧾 Requiere factura</button>
+      </div></div>
+      <div class="actions"><button class="btn btn-primary" id="ns-guardar-ingreso">Guardar</button></div>
+    `;
+    document.getElementById('ns-chip-compartido').addEventListener('click', ()=>{ compartido=!compartido; document.getElementById('ns-chip-compartido').classList.toggle('active', compartido); });
+    document.getElementById('ns-chip-facturar').addEventListener('click', ()=>{ reqFactura=!reqFactura; document.getElementById('ns-chip-facturar').classList.toggle('active', reqFactura); });
+    document.getElementById('ns-guardar-ingreso').addEventListener('click', ()=>{
+      const importe = parseFloat(document.getElementById('ns-importe').value);
+      if(!importe || importe<=0){ document.getElementById('ns-importe').focus(); return; }
+      const ingresos = Store.get(KEYS.INGRESOS_AU,[]);
+      const nuevoIngreso = {
+        id:uid(), date:fecha, clienteId:sc.clienteId, concepto:'Sesión', importe,
+        compartido, requiereFactura:reqFactura, facturado:false, numeroFactura:null,
+      };
+      ingresos.push(nuevoIngreso);
+      Store.set(KEYS.INGRESOS_AU, ingresos);
+      guardarSesion({scId, fecha, hora, estado, facturable:true, ingresoId:nuevoIngreso.id});
+    });
+  };
+
+  const guardarSesion = ({scId, fecha, hora, estado, facturable, ingresoId})=>{
+    const sesiones = Store.get(KEYS.SESIONES,[]);
+    if(existing){
+      const idx = sesiones.findIndex(x=>x.id===existing.id);
+      sesiones[idx] = {...sesiones[idx], clienteRecurrenteId:scId, fecha, hora, estado, facturable, ingresoId, actualizadoEn:new Date().toISOString()};
+    } else {
+      sesiones.push({id:uid(), clienteRecurrenteId:scId, fecha, hora, estado, facturable, ingresoId, creadoEn:new Date().toISOString(), actualizadoEn:new Date().toISOString()});
+    }
+    Store.set(KEYS.SESIONES, sesiones);
+    closeSheet();
+    renderAutonomo();
+    if(currentView==='finanzas') renderFinanzas();
+  };
+
+  pasoInicial();
+  overlay.classList.add('show');
+}
+
+let auVista = 'menu'; // 'menu' | 'clientes' | 'ingresos' | 'gastos' | 'sesionClientes' | 'sesiones'
+function irAAutonomoVista(v){ auVista = v; renderAutonomo(); }
+function closeAutonomoDetail(){ irAAutonomoVista('menu'); }
+
+function renderAutonomoHero(){
   const r = resumenTrimestre();
   document.getElementById('au-hero-slot').innerHTML = `
     <div class="hero" style="margin-bottom:12px;">
@@ -952,23 +1199,96 @@ function renderAutonomo(){
   renderAutonomoBalanceMensual();
   document.getElementById('au-editar-reserva').addEventListener('click', openEditarReservaFiscal);
   document.getElementById('au-editar-costes').addEventListener('click', openEditarCostesFijos);
+}
 
+function renderAutonomoMenu(){
+  const el = document.getElementById('au-menu');
+  const clientes = Store.get(KEYS.CLIENTES,[]);
+  const ingresos = Store.get(KEYS.INGRESOS_AU,[]);
+  const gastos = gastosDeduciblesTodos();
+  const sesionClientes = Store.get(KEYS.SESION_CLIENTES,[]).filter(sc=>!sc.fechaBaja);
+  const sesiones = Store.get(KEYS.SESIONES,[]);
+  const items = [
+    {tipo:'clientes', ic:'🧑‍💼', color:'var(--blue-soft)', titulo:'Clientes', sub:`${clientes.length} cliente${clientes.length===1?'':'s'}`},
+    {tipo:'ingresos', ic:'🧾', color:'var(--green-soft)', titulo:'Ingresos', sub:`${ingresos.length} este trimestre y anteriores`},
+    {tipo:'gastos', ic:'📎', color:'var(--orange-soft)', titulo:'Gastos deducibles', sub:`${gastos.length} registrado${gastos.length===1?'':'s'}`},
+    {tipo:'sesionClientes', ic:'📅', color:'var(--blue-soft)', titulo:'Sesiones recurrentes', sub:`${sesionClientes.length} activa${sesionClientes.length===1?'':'s'}`},
+    {tipo:'sesiones', ic:'✅', color:'var(--green-soft)', titulo:'Sesiones', sub:`${sesiones.length} registrada${sesiones.length===1?'':'s'}`},
+  ];
+  el.innerHTML = items.map(i=>`
+    <div class="row" data-nav="${i.tipo}" style="cursor:pointer;">
+      <div class="ico" style="background:${i.color}">${i.ic}</div>
+      <div class="meta"><div class="t1">${i.titulo}</div><div class="t2">${i.sub}</div></div>
+      <div class="chev">›</div>
+    </div>`).join('');
+  el.querySelectorAll('[data-nav]').forEach(r=>r.addEventListener('click', ()=>irAAutonomoVista(r.dataset.nav)));
+}
+
+function renderAutonomoDetail(tipo){
+  const wrap = document.getElementById('au-detail-wrap');
+  const configs = {
+    clientes: { titulo:'Clientes', body:`
+      <div class="section-head" style="margin-top:0;"><a id="au-clientes-toggle">Ver todos →</a></div>
+      <div class="card" id="au-clientes-list"></div>
+      <button class="btn btn-outline" id="au-add-cliente-btn" style="margin-top:10px;">＋ Añadir cliente</button>`,
+      after: ()=>{ renderClientesList(); document.getElementById('au-add-cliente-btn').addEventListener('click', ()=>openAddClienteSheet(()=>renderClientesList())); }
+    },
+    ingresos: { titulo:'Ingresos', body:`
+      <div class="section-head" style="margin-top:0;"><a id="au-ingresos-toggle">Ver todos →</a></div>
+      <div class="card" id="au-ingresos-list"></div>`,
+      after: renderIngresosList
+    },
+    gastos: { titulo:'Gastos deducibles', body:`
+      <div class="section-head" style="margin-top:0;"><a id="au-gastos-toggle">Ver todos →</a></div>
+      <div class="card" id="au-gastos-list"></div>
+      <button class="btn btn-outline" id="au-add-gasto-btn" style="margin-top:10px;">＋ Nuevo gasto</button>`,
+      after: ()=>{ renderGastosList(); document.getElementById('au-add-gasto-btn').addEventListener('click', ()=>openGastoSheet()); }
+    },
+    sesionClientes: { titulo:'Sesiones recurrentes', body:`
+      <div class="card" id="au-sesion-clientes-list"></div>
+      <button class="btn btn-outline" id="au-add-sesion-cliente-btn" style="margin-top:10px;">＋ Nueva sesión recurrente</button>`,
+      after: ()=>{ renderSesionClientes(); document.getElementById('au-add-sesion-cliente-btn').addEventListener('click', ()=>openSesionClienteSheet()); }
+    },
+    sesiones: { titulo:'Sesiones', body:`
+      <div class="section-head" style="margin-top:0;"><a id="au-sesiones-toggle">Ver todas →</a></div>
+      <div class="card" id="au-sesiones-list"></div>
+      <button class="btn btn-outline" id="au-add-sesion-btn" style="margin-top:10px;">＋ Registrar sesión</button>`,
+      after: ()=>{ renderSesionesList(); document.getElementById('au-add-sesion-btn').addEventListener('click', ()=>openNuevaSesionSheet()); }
+    },
+  };
+  const c = configs[tipo];
+  wrap.innerHTML = `<button class="back-btn" id="au-back">‹ Autónomo</button>
+    <h2 style="margin:4px 0 14px;font-size:20px;">${c.titulo}</h2>
+    ${c.body}`;
+  document.getElementById('au-back').addEventListener('click', closeAutonomoDetail);
+  c.after();
+}
+
+function renderClientesList(){
   const clientes = Store.get(KEYS.CLIENTES,[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const el = document.getElementById('au-clientes-list');
+  if(!el) return;
   let showAllClientes = auShowAllClientes;
   const shownClientes = showAllClientes ? clientes : clientes.slice(0,5);
   document.getElementById('au-clientes-toggle').textContent = showAllClientes ? '← Ver menos' : 'Ver todos →';
-  document.getElementById('au-clientes-list').innerHTML = shownClientes.length ? shownClientes.map(c=>`
+  document.getElementById('au-clientes-toggle').onclick = ()=>{ auShowAllClientes=!auShowAllClientes; renderClientesList(); };
+  el.innerHTML = shownClientes.length ? shownClientes.map(c=>`
     <div class="row" data-cli="${c.id}" style="cursor:pointer;"><div class="ico" style="background:var(--blue-soft);color:var(--blue);">🧑</div>
       <div class="meta"><div class="t1">${c.nombre}</div><div class="t2">${c.nif}</div></div>
       <div class="chev">›</div></div>
   `).join('') : `<div class="empty"><span class="icn">🧑‍💼</span><div class="t">Sin clientes</div></div>`;
-  document.querySelectorAll('#au-clientes-list [data-cli]').forEach(r=>r.addEventListener('click', ()=>openEditClienteSheet(r.dataset.cli)));
+  el.querySelectorAll('[data-cli]').forEach(r=>r.addEventListener('click', ()=>openEditClienteSheet(r.dataset.cli)));
+}
 
+function renderIngresosList(){
   const ingresos = Store.get(KEYS.INGRESOS_AU,[]).slice().reverse().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const el = document.getElementById('au-ingresos-list');
+  if(!el) return;
   let showAllIng = auShowAllIngresos;
   const shownIng = showAllIng ? ingresos : ingresos.slice(0,6);
   document.getElementById('au-ingresos-toggle').textContent = showAllIng ? '← Ver menos' : 'Ver todos →';
-  document.getElementById('au-ingresos-list').innerHTML = ingresos.length ? shownIng.map(i=>{
+  document.getElementById('au-ingresos-toggle').onclick = ()=>{ auShowAllIngresos=!auShowAllIngresos; renderIngresosList(); };
+  el.innerHTML = ingresos.length ? shownIng.map(i=>{
     const info = ingresoEtiquetas(i);
     return `<div class="row" data-ing="${i.id}" style="cursor:pointer;"><div class="ico" style="background:${info.color}">${info.ic}</div>
       <div class="meta"><div class="t1">${clienteNombre(i.clienteId)}${i.concepto? ' · '+i.concepto:''}</div>
@@ -976,29 +1296,46 @@ function renderAutonomo(){
       <div class="side"><div class="amt income num">${fmtEUR(ingresoNeto(i))}</div></div>
       <div class="chev">›</div></div>`;
   }).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin ingresos todavía</div><div class="d">Regístralos con el botón +</div></div>`;
-  document.querySelectorAll('#au-ingresos-list [data-ing]').forEach(r=>r.addEventListener('click', ()=>openIngresoSheet(r.dataset.ing)));
+  el.querySelectorAll('[data-ing]').forEach(r=>r.addEventListener('click', ()=>openIngresoSheet(r.dataset.ing)));
+}
 
+function renderGastosList(){
   const gastos = gastosDeduciblesTodos().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const el = document.getElementById('au-gastos-list');
+  if(!el) return;
   let showAllGas = auShowAllGastos;
   const shownGas = showAllGas ? gastos : gastos.slice(0,6);
   document.getElementById('au-gastos-toggle').textContent = showAllGas ? '← Ver menos' : 'Ver todos →';
-  document.getElementById('au-gastos-list').innerHTML = gastos.length ? shownGas.map(g=>`
+  document.getElementById('au-gastos-toggle').onclick = ()=>{ auShowAllGastos=!auShowAllGastos; renderGastosList(); };
+  el.innerHTML = gastos.length ? shownGas.map(g=>`
     <div class="row" data-gas="${g.id}" data-origen="${g.origen}" style="cursor:pointer;"><div class="ico" style="background:var(--orange-soft)">🧾</div>
       <div class="meta"><div class="t1">${g.descripcion}</div><div class="t2">${fmtDate(g.date)}${g.origen==='finanzas'?' · desde Finanzas':''}</div></div>
       ${g.photo?`<img class="thumb" src="${g.photo}" data-src="${g.photo}">`:''}
       <div class="side"><div class="amt expense num">${fmtEUR(g.importe)}</div></div>
       <div class="chev">›</div></div>
   `).join('') : `<div class="empty"><span class="icn">🧾</span><div class="t">Sin gastos todavía</div><div class="d">Registra uno con foto de la factura</div></div>`;
-  document.querySelectorAll('#au-gastos-list [data-gas]').forEach(r=>r.addEventListener('click', e=>{
-    if(e.target.classList.contains('thumb')) return; // el tap en la miniatura abre el visor, no la edición
+  el.querySelectorAll('[data-gas]').forEach(r=>r.addEventListener('click', e=>{
+    if(e.target.classList.contains('thumb')) return;
     if(r.dataset.origen==='finanzas') openTxSheet(null,null,null,r.dataset.gas);
     else openGastoSheet(r.dataset.gas);
   }));
-  document.querySelectorAll('#au-gastos-list .thumb').forEach(img=>img.addEventListener('click', ()=>openLightbox(img.dataset.src)));
+  el.querySelectorAll('.thumb').forEach(img=>img.addEventListener('click', ()=>openLightbox(img.dataset.src)));
 }
 
-document.getElementById('au-gastos-toggle').addEventListener('click', ()=>{ auShowAllGastos = !auShowAllGastos; renderAutonomo(); });
-document.getElementById('au-add-gasto-btn').addEventListener('click', ()=>openGastoSheet());
+function renderAutonomo(){
+  const mainWrap = document.getElementById('au-main-wrap');
+  const detailWrap = document.getElementById('au-detail-wrap');
+  mainWrap.style.display = auVista==='menu' ? 'block' : 'none';
+  detailWrap.style.display = auVista==='menu' ? 'none' : 'block';
+  if(auVista==='menu'){
+    renderAutonomoHero();
+    renderAutonomoMenu();
+  } else {
+    renderAutonomoDetail(auVista);
+  }
+}
+
+let auShowAllSesiones = false;
 
 function openGastoSheet(gastoId){
   const existing = gastoId ? Store.get(KEYS.GASTOS_AU,[]).find(x=>x.id===gastoId) : null;
@@ -1043,10 +1380,6 @@ function openGastoSheet(gastoId){
   }
   overlay.classList.add('show');
 }
-
-document.getElementById('au-clientes-toggle').addEventListener('click', ()=>{ auShowAllClientes = !auShowAllClientes; renderAutonomo(); });
-document.getElementById('au-ingresos-toggle').addEventListener('click', ()=>{ auShowAllIngresos = !auShowAllIngresos; renderAutonomo(); });
-document.getElementById('au-add-cliente-btn').addEventListener('click', ()=>openAddClienteSheet());
 
 function openEditClienteSheet(cliId){
   const clientes = Store.get(KEYS.CLIENTES,[]);
@@ -1307,7 +1640,7 @@ function showView(name){
   if(name==='inicio') renderInicio();
   if(name==='finanzas'){ finVista='menu'; renderFinanzas(); }
   if(name==='vehiculos') renderVehiculosList();
-  if(name==='autonomo') renderAutonomo();
+  if(name==='autonomo'){ auVista='menu'; renderAutonomo(); }
 }
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click', ()=>showView(t.dataset.view)));
 document.querySelectorAll('[data-goto]').forEach(a=>a.addEventListener('click', ()=>showView(a.dataset.goto)));
